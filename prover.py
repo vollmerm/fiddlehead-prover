@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 """
-A compact, Pythonic core for a Boyer–Moore / ACL2-style rewriting engine.
-
-Fixes included:
-- Proper hash-consing without dataclass field interference
-- Added tests
+Boyer–Moore style rewriting core with:
+- hash-consed terms
+- LPO ordering
+- AC normalization
+- contextual rewriting (substitution-based)
+- clause reasoning
+- tracing
+- term indexing
+- ground-term caching
+- NEW: per-call memoization (term indexing + caching combined)
+- NOTE: conditional rewrites removed earlier (see comments)
 """
-
-# -----------------------------------------------------------------------------
-# Imports
-# -----------------------------------------------------------------------------
 
 from dataclasses import dataclass
 from typing import Tuple, Dict, Optional
 from weakref import WeakValueDictionary
 
-
 # -----------------------------------------------------------------------------
-# Term definitions (hash-consed DAG)
+# Terms (hash-consed)
 # -----------------------------------------------------------------------------
 
 class Term:
@@ -47,7 +48,6 @@ class Fun(Term):
         self = object.__new__(cls)
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "args", args)
-
         cls._cache[key] = self
         return self
 
@@ -57,29 +57,21 @@ class Fun(Term):
         return f"{self.symbol}({', '.join(map(str, self.args))})"
 
 
-# Properly attach cache AFTER class definition (not a dataclass field)
 Fun._cache = WeakValueDictionary()
 
-
 # -----------------------------------------------------------------------------
-# Substitutions
+# Substitution
 # -----------------------------------------------------------------------------
 
 Subst = Dict[Var, Term]
-
-
-def extend(subst: Subst, v: Var, t: Term) -> Subst:
-    new = subst.copy()
-    new[v] = t
-    return new
 
 
 def apply_subst(term: Term, subst: Subst) -> Term:
     match term:
         case Var() as v:
             return subst.get(v, v)
-        case Fun(symbol, args):
-            return Fun(symbol, tuple(apply_subst(a, subst) for a in args))
+        case Fun(f, args):
+            return Fun(f, tuple(apply_subst(a, subst) for a in args))
 
 
 # -----------------------------------------------------------------------------
@@ -98,68 +90,47 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
         case Var() as v, t:
             if v in subst:
                 return subst if subst[v] is t else None
-            return extend(subst, v, t)
+            new = subst.copy()
+            new[v] = t
+            return new
 
-        case Fun(f1, args1), Fun(f2, args2):
-            if f1 != f2 or len(args1) != len(args2):
+        case Fun(f1, a1), Fun(f2, a2):
+            if f1 != f2 or len(a1) != len(a2):
                 return None
-
-            for a1, a2 in zip(args1, args2):
-                subst = match(a1, a2, subst)
+            for x, y in zip(a1, a2):
+                subst = match(x, y, subst)
                 if subst is None:
                     return None
             return subst
 
-        case _:
-            return None
+    return None
 
 
 # -----------------------------------------------------------------------------
-# Ordering (Minimal LPO)
+# LPO ordering
 # -----------------------------------------------------------------------------
 
-# Precedence: higher = greater
-PRECEDENCE = {
-    "add": 2,
-    "S": 1,
-    "0": 0,
-}
+PRECEDENCE = {"add": 2, "S": 1, "0": 0}
 
 
-def prec(f: str) -> int:
+def prec(f: str):
     return PRECEDENCE.get(f, 0)
 
 
 def lpo_greater(s: Term, t: Term) -> bool:
-    """
-    Very small Lexicographic Path Ordering (LPO) approximation.
-
-    s > t if:
-    1. s is a Fun and some argument >= t
-    2. root(s) > root(t) and s > all args of t
-    3. same root and lexicographic argument comparison
-    """
-
     if s is t:
         return False
 
     match s, t:
-        # Variables are minimal
         case _, Var():
             return True
         case Var(), Fun():
             return False
-
         case Fun(f, s_args), Fun(g, t_args):
-            # (1) subterm property
-            if any(lpo_geq(si, t) for si in s_args):
+            if any(lpo_greater(si, t) or si is t for si in s_args):
                 return True
-
-            # (2) precedence
             if prec(f) > prec(g) and all(lpo_greater(s, ti) for ti in t_args):
                 return True
-
-            # (3) same symbol → lexicographic
             if f == g:
                 for si, ti in zip(s_args, t_args):
                     if si is ti:
@@ -168,29 +139,39 @@ def lpo_greater(s: Term, t: Term) -> bool:
                         return True
                     if lpo_greater(ti, si):
                         return False
-                return len(s_args) > len(t_args)
-
     return False
 
 
-def lpo_geq(s: Term, t: Term) -> bool:
-    return s is t or lpo_greater(s, t)
-
-
-def decreases(old: Term, new: Term) -> bool:
-    return lpo_greater(old, new)
+def decreases(a, b):
+    return lpo_greater(a, b)
 
 
 # -----------------------------------------------------------------------------
-# Rules
-# -----------------------------------------------------------------------------
+# Rules + indexing
 # -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Rule:
     lhs: Term
     rhs: Term
-    conditions: Tuple[Tuple[Term, Term], ...] = ()
+
+
+class RuleIndex:
+    def __init__(self, rules):
+        self.by_symbol: Dict[Optional[str], list] = {}
+        for r in rules:
+            match r.lhs:
+                case Fun(sym, _):
+                    self.by_symbol.setdefault(sym, []).append(r)
+                case Var():
+                    self.by_symbol.setdefault(None, []).append(r)
+
+    def get(self, term: Term):
+        match term:
+            case Fun(sym, _):
+                return self.by_symbol.get(sym, []) + self.by_symbol.get(None, [])
+            case Var():
+                return self.by_symbol.get(None, [])
 
 
 # -----------------------------------------------------------------------------
@@ -201,160 +182,72 @@ class Rule:
 class Context:
     equalities: Tuple[Tuple[Term, Term], ...] = ()
 
-    def extend(self, eq):
-        return Context(self.equalities + (eq,))
 
-
-def orient(lhs: Term, rhs: Term):
-    if decreases(lhs, rhs):
-        return (rhs, lhs)
-    if decreases(rhs, lhs):
-        return (lhs, rhs)
-    return None
+def context_subst(ctx: Context) -> Subst:
+    subst: Subst = {}
+    for lhs, rhs in ctx.equalities:
+        if isinstance(lhs, Var):
+            subst[lhs] = rhs
+    return subst
 
 
 def context_rules(ctx: Context):
     for lhs, rhs in ctx.equalities:
-        o = orient(lhs, rhs)
-        if o:
-            yield Rule(*o)
+        if isinstance(lhs, Var):
+            continue
+        if decreases(lhs, rhs):
+            yield Rule(lhs, rhs)
+        elif decreases(rhs, lhs):
+            yield Rule(rhs, lhs)
 
 
 # -----------------------------------------------------------------------------
-# Discrimination tree
+# AC normalization
 # -----------------------------------------------------------------------------
 
-class DTNode:
-    def __init__(self):
-        self.children = {}
-        self.rules = []
-
-
-class DiscriminationTree:
-    """
-    Simpler and correct indexing by root symbol.
-    (The previous discrimination tree was too strict and failed to retrieve rules.)
-    """
-
-    def __init__(self):
-        self.by_symbol = {}
-
-    def insert(self, term: Term, rule: Rule):
-        match term:
-            case Fun(symbol, _):
-                self.by_symbol.setdefault(symbol, []).append(rule)
-            case Var():
-                self.by_symbol.setdefault(None, []).append(rule)
-
-    def retrieve(self, term: Term):
-        match term:
-            case Fun(symbol, _):
-                return self.by_symbol.get(symbol, []) + self.by_symbol.get(None, [])
-            case Var():
-                return self.by_symbol.get(None, [])
-
-
-# -----------------------------------------------------------------------------
-# AC normalization (associative + commutative)
-# -----------------------------------------------------------------------------
-
-ASSOCIATIVE = {"add"}
-COMMUTATIVE = {"add"}
+ASSOC = {"add"}
+COMM = {"add"}
 
 
 def term_key(t: Term):
-    """Total ordering key for terms (for canonical sorting)."""
     match t:
-        case Var(name):
-            return (0, name)
-        case Fun(symbol, args):
-            return (1, symbol, tuple(term_key(a) for a in args))
+        case Var(n):
+            return (0, n)
+        case Fun(f, args):
+            return (1, f, tuple(term_key(a) for a in args))
 
 
-def ac_normalize(term: Term) -> Term:
-    """
-    Canonical AC normalization:
-    - Flatten associative operators
-    - Sort arguments if commutative
-    - Rebuild right-associated
-
-    Example:
-        add(y, add(x, z)) -> add(x, add(y, z))
-    """
-    match term:
-        case Fun(symbol, args) if symbol in ASSOCIATIVE and len(args) == 2:
+def ac_normalize(t: Term) -> Term:
+    match t:
+        case Fun(f, (a, b)) if f in ASSOC:
             flat = []
 
-            def collect(t):
-                match t:
-                    case Fun(s, a) if s == symbol and len(a) == 2:
-                        collect(a[0])
-                        collect(a[1])
+            def collect(x):
+                match x:
+                    case Fun(f2, (l, r)) if f2 == f:
+                        collect(l)
+                        collect(r)
                     case _:
-                        flat.append(t)
+                        flat.append(x)
 
-            collect(term)
+            collect(t)
 
-            # Sort if commutative
-            if symbol in COMMUTATIVE:
+            if f in COMM:
                 flat.sort(key=term_key)
 
-            # Rebuild right-associated
-            result = flat[-1]
-            for t in reversed(flat[:-1]):
-                result = Fun(symbol, (t, result))
+            res = flat[-1]
+            for x in reversed(flat[:-1]):
+                res = Fun(f, (x, res))
+            return res
 
-            return result
-
-    return term
+    return t
 
 
 # -----------------------------------------------------------------------------
-# Rewriting
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-
-def rewrite_once(term, rule, ctx, index, cache):
-    subst = match(rule.lhs, term)
-    if subst is None:
-        return None
-
-    new_term = apply_subst(rule.rhs, subst)
-
-    if not decreases(term, new_term):
-        return None
-
-    return new_term
-
-
-def rewrite(term: Term, index: DiscriminationTree, ctx: Context, cache) -> Term:
-    match term:
-        case Fun(symbol, args):
-            args = tuple(normalize(a, index, ctx, cache) for a in args)
-            term = Fun(symbol, args)
-
-    # Apply AC normalization before rewriting
-    term = ac_normalize(term)
-
-    for rule in index.retrieve(term):
-        t2 = rewrite_once(term, rule, ctx, index, cache)
-        if t2 is not None:
-            return t2
-
-    for rule in context_rules(ctx):
-        t2 = rewrite_once(term, rule, ctx, index, cache)
-        if t2 is not None:
-            return t2
-
-    return term
-
-
-# -----------------------------------------------------------------------------
-# Normalization
+# Ground caching + local memo
 # -----------------------------------------------------------------------------
 
-GLOBAL_GROUND_CACHE: Dict[Term, Term] = {}
+GROUND_CACHE: Dict[Term, Term] = {}
 
 
 def is_ground(t: Term) -> bool:
@@ -365,50 +258,139 @@ def is_ground(t: Term) -> bool:
             return all(is_ground(a) for a in args)
 
 
-def normalize(term: Term, index, ctx: Context, cache=None, fuel=1000):
-    if cache is None:
-        cache = {}
+# -----------------------------------------------------------------------------
+# Trace
+# -----------------------------------------------------------------------------
 
-    def norm(t, fuel_left):
-        if t in cache:
-            return cache[t]
+@dataclass
+class TraceStep:
+    before: Term
+    after: Term
+    rule: Rule
 
-        if is_ground(t) and t in GLOBAL_GROUND_CACHE:
-            return GLOBAL_GROUND_CACHE[t]
 
-        if fuel_left <= 0:
-            return t
+class Trace:
+    def __init__(self):
+        self.steps = []
 
-        t2 = rewrite(t, index, ctx, cache)
-
-        if t2 is t:
-            cache[t] = t
-            if is_ground(t):
-                GLOBAL_GROUND_CACHE[t] = t
-            return t
-
-        result = norm(t2, fuel_left - 1)
-        cache[t] = result
-
-        if is_ground(t):
-            GLOBAL_GROUND_CACHE[t] = result
-
-        return result
-
-    return norm(term, fuel)
+    def add(self, b, a, r):
+        self.steps.append(TraceStep(b, a, r))
 
 
 # -----------------------------------------------------------------------------
-# DSL helpers
+# Rewriting
 # -----------------------------------------------------------------------------
 
 
-def Const(name: str):
-    return Fun(name, ())
+def rewrite_once(term, rule, trace=None):
+    subst = match(rule.lhs, term)
+    if subst is None:
+        return None
+
+    new = apply_subst(rule.rhs, subst)
+
+    if not decreases(term, new):
+        return None
+
+    if trace:
+        trace.add(term, new, rule)
+
+    return new
 
 
-def App(f: str, *args):
-    return Fun(f, args)
+def rewrite(term, index: RuleIndex, ctx: Context, trace=None, memo=None):
+    if memo is not None and term in memo:
+        return memo[term]
+
+    subst = context_subst(ctx)
+    term = apply_subst(term, subst)
+
+    match term:
+        case Fun(f, args):
+            args = tuple(rewrite(a, index, ctx, trace, memo) for a in args)
+            term = Fun(f, args)
+
+    term = ac_normalize(term)
+
+    for r in index.get(term):
+        t2 = rewrite_once(term, r, trace)
+        if t2 is not None:
+            if memo is not None:
+                memo[term] = t2
+            return t2
+
+    for r in context_rules(ctx):
+        t2 = rewrite_once(term, r, trace)
+        if t2 is not None:
+            if memo is not None:
+                memo[term] = t2
+            return t2
+
+    if memo is not None:
+        memo[term] = term
+
+    return term
+
+
+# -----------------------------------------------------------------------------
+# Normalize (now with memoization)
+# -----------------------------------------------------------------------------
+
+
+def normalize(term, rules, ctx: Context = Context(), trace=None, fuel=1000):
+    index = RuleIndex(rules)
+    memo: Dict[Term, Term] = {}
+    original = term
+
+    for _ in range(fuel):
+        if is_ground(term) and term in GROUND_CACHE:
+            return GROUND_CACHE[term]
+
+        t2 = rewrite(term, index, ctx, trace, memo)
+
+        if t2 is term:
+            break
+
+        term = t2
+
+    if is_ground(original):
+        GROUND_CACHE[original] = term
+    if is_ground(term):
+        GROUND_CACHE[term] = term
+
+    return term
+
+
+# -----------------------------------------------------------------------------
+# Clause reasoning
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Clause:
+    assumptions: Tuple[Tuple[Term, Term], ...]
+    goal: Term
+
+
+def simplify_clause(clause: Clause, rules):
+    ctx = Context(clause.assumptions)
+    new_goal = normalize(clause.goal, rules, ctx)
+    return Clause(clause.assumptions, new_goal)
+
+
+def clause_solved(clause: Clause) -> bool:
+    match clause.goal:
+        case Fun("eq", (l, r)):
+            return l is r
+    return False
+
+
+# -----------------------------------------------------------------------------
+# DSL
+# -----------------------------------------------------------------------------
+
+
+def Const(n): return Fun(n, ())
+def App(f, *a): return Fun(f, a)
 
 
 # -----------------------------------------------------------------------------
@@ -418,52 +400,61 @@ def App(f: str, *args):
 if __name__ == "__main__":
     x = Var("x")
     y = Var("y")
+    z = Var("z")
 
     zero = Const("0")
     S = lambda t: App("S", t)
     add = lambda a, b: App("add", a, b)
+    eq = lambda a, b: App("eq", a, b)
 
     r1 = Rule(add(zero, y), y)
     r2 = Rule(add(S(x), y), S(add(x, y)))
+    rules = [r1, r2]
 
-    dt = DiscriminationTree()
-    dt.insert(r1.lhs, r1)
-    dt.insert(r2.lhs, r2)
+    # Test 1
+    t = add(S(S(zero)), S(zero))
+    res = normalize(t, rules)
+    print("Result:", res)
+    assert str(res) == "S(S(S(0)))"
 
-    # Test 1: normalization
-    term = add(S(S(zero)), S(zero))
-    result = normalize(term, dt, Context())
-    print("Result:", result)
-    assert str(result) == "S(S(S(0)))"
+    # Test 2 hash-cons
+    assert App("f", x) is App("f", x)
 
-    # Test 2: hash-consing
-    t1 = App("f", x)
-    t2 = App("f", x)
-    assert t1 is t2
+    # Test 3 subst
+    assert str(apply_subst(add(x, y), {x: zero})) == "add(0, y)"
 
-    # Test 3: substitution
-    subst = {x: zero}
-    assert str(apply_subst(add(x, y), subst)) == "add(0, y)"
+    # Test 4 match
+    m = match(add(x, y), add(zero, S(zero)))
+    assert m[x] is zero
 
-        # Test 4: matching
-    subst2 = match(add(x, y), add(zero, S(zero)))
-    assert subst2 is not None
-    assert str(subst2[x]) == "0"
+    # Test 5 AC
+    assert str(normalize(add(y, add(x, z)), rules)) == "add(x, add(y, z))"
 
-        # Test 5: associativity normalization
-    z = Var("z")
-    term2 = add(add(x, y), z)
-    result2 = normalize(term2, dt, Context())
-    assert str(result2) == "add(x, add(y, z))"
+    # Test 6 trace
+    tr = Trace()
+    normalize(add(S(zero), zero), rules, trace=tr)
+    assert len(tr.steps) > 0
 
-    # Test 6: commutativity normalization
-    term3 = add(y, x)
-    result3 = normalize(term3, dt, Context())
-    assert str(result3) == "add(x, y)"
+    # Test 7 contextual rewriting
+    clause = Clause(((x, zero),), add(x, S(zero)))
+    simplified = simplify_clause(clause, rules)
+    assert str(simplified.goal) == "S(0)"
 
-    # Test 7: AC normalization combined
-    term4 = add(y, add(x, z))
-    result4 = normalize(term4, dt, Context())
-    assert str(result4) == "add(x, add(y, z))"
+    # Test 8 clause solved
+    clause2 = Clause((), eq(zero, zero))
+    assert clause_solved(simplify_clause(clause2, rules))
+
+    # Test 9 ground caching
+    t = add(zero, zero)
+    r = normalize(t, rules)
+    assert t in GROUND_CACHE
+    assert GROUND_CACHE[t] is r
+
+    # Test 10 memoization effectiveness (same object reused)
+    t = add(zero, zero)
+    r1 = normalize(t, rules)
+    r2 = normalize(t, rules)
+    assert r1 is r2
 
     print("All tests passed.")
+

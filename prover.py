@@ -255,7 +255,63 @@ class DiscriminationTree:
 
 
 # -----------------------------------------------------------------------------
+# AC normalization (associative + commutative)
+# -----------------------------------------------------------------------------
+
+ASSOCIATIVE = {"add"}
+COMMUTATIVE = {"add"}
+
+
+def term_key(t: Term):
+    """Total ordering key for terms (for canonical sorting)."""
+    match t:
+        case Var(name):
+            return (0, name)
+        case Fun(symbol, args):
+            return (1, symbol, tuple(term_key(a) for a in args))
+
+
+def ac_normalize(term: Term) -> Term:
+    """
+    Canonical AC normalization:
+    - Flatten associative operators
+    - Sort arguments if commutative
+    - Rebuild right-associated
+
+    Example:
+        add(y, add(x, z)) -> add(x, add(y, z))
+    """
+    match term:
+        case Fun(symbol, args) if symbol in ASSOCIATIVE and len(args) == 2:
+            flat = []
+
+            def collect(t):
+                match t:
+                    case Fun(s, a) if s == symbol and len(a) == 2:
+                        collect(a[0])
+                        collect(a[1])
+                    case _:
+                        flat.append(t)
+
+            collect(term)
+
+            # Sort if commutative
+            if symbol in COMMUTATIVE:
+                flat.sort(key=term_key)
+
+            # Rebuild right-associated
+            result = flat[-1]
+            for t in reversed(flat[:-1]):
+                result = Fun(symbol, (t, result))
+
+            return result
+
+    return term
+
+
+# -----------------------------------------------------------------------------
 # Rewriting
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 
@@ -277,6 +333,9 @@ def rewrite(term: Term, index: DiscriminationTree, ctx: Context, cache) -> Term:
         case Fun(symbol, args):
             args = tuple(normalize(a, index, ctx, cache) for a in args)
             term = Fun(symbol, args)
+
+    # Apply AC normalization before rewriting
+    term = ac_normalize(term)
 
     for rule in index.retrieve(term):
         t2 = rewrite_once(term, rule, ctx, index, cache)
@@ -386,10 +445,25 @@ if __name__ == "__main__":
     subst = {x: zero}
     assert str(apply_subst(add(x, y), subst)) == "add(0, y)"
 
-    # Test 4: matching
+        # Test 4: matching
     subst2 = match(add(x, y), add(zero, S(zero)))
     assert subst2 is not None
     assert str(subst2[x]) == "0"
 
-    print("All tests passed.")
+        # Test 5: associativity normalization
+    z = Var("z")
+    term2 = add(add(x, y), z)
+    result2 = normalize(term2, dt, Context())
+    assert str(result2) == "add(x, add(y, z))"
 
+    # Test 6: commutativity normalization
+    term3 = add(y, x)
+    result3 = normalize(term3, dt, Context())
+    assert str(result3) == "add(x, y)"
+
+    # Test 7: AC normalization combined
+    term4 = add(y, add(x, z))
+    result4 = normalize(term4, dt, Context())
+    assert str(result4) == "add(x, add(y, z))"
+
+    print("All tests passed.")

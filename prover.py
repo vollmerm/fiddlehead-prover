@@ -32,6 +32,7 @@ class Term:
 @dataclass(frozen=True, slots=True)
 class Var(Term):
     name: str
+    sort: Optional[str] = None
 
     def __str__(self):
         return self.name
@@ -269,7 +270,7 @@ class EqClasses:
         self.parent[rb] = ra
         if self.rank[ra] == self.rank[rb]:
             self.rank[ra] += 1
-        if term_key(self.rep[rb]) < term_key(self.rep[ra]):
+        if rep_priority(self.rep[rb]) < rep_priority(self.rep[ra]):
             self.rep[ra] = self.rep[rb]
         return True
 
@@ -374,6 +375,16 @@ def term_key(t: Term):
             return (0, f, len(args), tuple(term_key(a) for a in args))
         case Var(n):
             return (1, n)
+
+
+def rep_priority(t: Term):
+    match t:
+        case Fun(_, args) if not args:
+            return (0, term_key(t))
+        case Var():
+            return (1, term_key(t))
+        case Fun():
+            return (2, term_key(t))
 
 
 def ac_normalize(t: Term) -> Term:
@@ -548,6 +559,7 @@ class InductionConstructor:
 @dataclass(frozen=True)
 class InductionScheme:
     name: str
+    sort: str
     base_terms: Tuple[Term, ...]
     constructors: Tuple[InductionConstructor, ...]
 
@@ -557,9 +569,41 @@ def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") ->
         zero = Const("0")
     return InductionScheme(
         name="nat",
+        sort="Nat",
         base_terms=(zero,),
         constructors=(InductionConstructor(succ_symbol, 1, (0,)),),
     )
+
+
+def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") -> InductionScheme:
+    return InductionScheme(
+        name="list",
+        sort="List",
+        base_terms=(Const(nil_symbol),),
+        constructors=(InductionConstructor(cons_symbol, 2, (1,)),),
+    )
+
+
+INDUCTION_SCHEMES: Dict[str, InductionScheme] = {}
+
+
+def register_induction_scheme(scheme: InductionScheme):
+    INDUCTION_SCHEMES[scheme.name] = scheme
+
+
+def get_induction_scheme(name: str) -> Optional[InductionScheme]:
+    return INDUCTION_SCHEMES.get(name)
+
+
+def get_induction_scheme_for_sort(sort: str) -> Optional[InductionScheme]:
+    for scheme in INDUCTION_SCHEMES.values():
+        if scheme.sort == sort:
+            return scheme
+    return None
+
+
+def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
+    return var.sort is None or var.sort == scheme.sort
 
 
 def vars_in_term(term: Term) -> set[str]:
@@ -594,17 +638,20 @@ def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
     return None
 
 
-def fresh_var(base: str, used_names: set[str]) -> Var:
+def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Var:
     i = 0
     while True:
         name = f"{base}_{i}"
         if name not in used_names:
             used_names.add(name)
-            return Var(name)
+            return Var(name, sort)
         i += 1
 
 
 def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+    if not var_matches_scheme(var, scheme):
+        return []
+
     used = vars_in_clause(clause).copy()
     branches: list[Clause] = []
 
@@ -612,7 +659,7 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
         branches.append(instantiate_clause(clause, {var: b}))
 
     for cons in scheme.constructors:
-        rec_vars = [fresh_var(f"{var.name}_ih", used) for _ in cons.recursive_positions]
+        rec_vars = [fresh_var(f"{var.name}_ih", used, scheme.sort) for _ in cons.recursive_positions]
         ih_assumptions: list[Tuple[Term, Term]] = []
         for rv in rec_vars:
             ih_goal = instantiate_clause(clause, {var: rv}).goal
@@ -693,6 +740,8 @@ def prove_with_induction(
     depth: int = 5,
     induction_depth: int = 1,
 ) -> bool:
+    if not var_matches_scheme(var, scheme):
+        return False
     if prove(clause, rules, depth):
         return True
     if induction_depth <= 0:
@@ -709,6 +758,20 @@ def prove_with_induction(
     )
 
 
+def prove_with_registered_induction(
+    clause: Clause,
+    rules,
+    var: Var,
+    scheme_name: str,
+    depth: int = 5,
+    induction_depth: int = 1,
+) -> bool:
+    scheme = get_induction_scheme(scheme_name)
+    if scheme is None:
+        return False
+    return prove_with_induction(clause, rules, var, scheme, depth, induction_depth)
+
+
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
@@ -717,12 +780,19 @@ if __name__ == "__main__":
     x = Var("x")
     y = Var("y")
     z = Var("z")
+    x_nat = Var("xn", "Nat")
+    xs = Var("xs", "List")
+    h = Var("h")
+    t = Var("t")
 
     zero = Const("0")
     one = Const("1")
     
     S = lambda t: App("S", t)
     add = lambda a, b: App("add", a, b)
+    nil = Const("nil")
+    cons = lambda a, b: App("cons", a, b)
+    app = lambda a, b: App("append", a, b)
     eq = lambda a, b: App("eq", a, b)
     neq = lambda a,b:App("neq",a,b)
     f = lambda a: App("f", a)
@@ -732,7 +802,10 @@ if __name__ == "__main__":
     r2 = Rule(add(S(x), y), S(add(x, y)))
     r3 = Rule(f(x), one, conditions=((x, zero),))
 
-    rules = builtin_rules() + [r1, r2, r3]
+    r4 = Rule(app(nil, xs), xs)
+    r5 = Rule(app(cons(h, t), xs), cons(h, app(t, xs)))
+
+    rules = builtin_rules() + [r1, r2, r3, r4, r5]
 
     # Test 1
     t = add(S(S(zero)), S(zero))
@@ -794,6 +867,7 @@ if __name__ == "__main__":
 
     # Test 14: induction obligations for nat produce base + step (with IH)
     nat_scheme = nat_induction_scheme(zero)
+    list_scheme = list_induction_scheme()
     clause4 = Clause((), eq(add(x, zero), x))
     branches = induction_branches(clause4, x, nat_scheme)
     assert len(branches) == 2
@@ -810,5 +884,31 @@ if __name__ == "__main__":
     # Test 16: a clearly false ground goal is not proven
     bad = Clause((), eq(add(zero, one), zero))
     assert not prove(bad, rules, depth=8)
+
+    # Test 17: sort mismatch blocks induction
+    assert not prove_with_induction(clause4, rules, xs, nat_scheme, depth=8, induction_depth=1)
+    assert not induction_branches(clause4, xs, nat_scheme)
+
+    # Test 18: scheme registry lookup and proof
+    register_induction_scheme(nat_scheme)
+    register_induction_scheme(list_scheme)
+    assert get_induction_scheme("nat") is nat_scheme
+    assert get_induction_scheme_for_sort("List") is list_scheme
+    assert prove_with_registered_induction(clause4, rules, x_nat, "nat", depth=8, induction_depth=1)
+    assert not prove_with_registered_induction(clause4, rules, x_nat, "list", depth=8, induction_depth=1)
+
+    # Test 19: list induction branch shape
+    list_goal = Clause((), eq(app(xs, nil), xs))
+    list_branches = induction_branches(list_goal, xs, list_scheme)
+    assert len(list_branches) == 2
+    assert str(list_branches[0].goal) == "eq(append(nil, nil), nil)"
+    assert str(list_branches[1].goal) == "eq(append(cons(xs_cons_arg_0, xs_ih_0), nil), cons(xs_cons_arg_0, xs_ih_0))"
+    assert len(list_branches[1].assumptions) == 1
+    ih_l2, ih_r2 = list_branches[1].assumptions[0]
+    assert str(ih_l2) == "append(xs_ih_0, nil)"
+    assert str(ih_r2) == "xs_ih_0"
+
+    # Test 20: prove append(xs, nil) = xs by explicit list induction
+    assert prove_with_induction(list_goal, rules, xs, list_scheme, depth=10, induction_depth=1)
 
     print("All tests passed.")

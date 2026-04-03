@@ -14,6 +14,7 @@ Boyer–Moore style rewriting core with:
 - conditional rewriting
 - negation and split
 - congruence closure
+- induction schemes
 """
 
 from dataclasses import dataclass
@@ -104,7 +105,7 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
     match pattern, target:
         case Var() as v, t:
             if v in subst:
-                return subst if subst[v] is t else None
+                return subst if subst[v] == t else None
             new = subst.copy()
             new[v] = t
             return new
@@ -537,6 +538,100 @@ class Clause:
     goal: Term
 
 
+@dataclass(frozen=True)
+class InductionConstructor:
+    symbol: str
+    arity: int
+    recursive_positions: Tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class InductionScheme:
+    name: str
+    base_terms: Tuple[Term, ...]
+    constructors: Tuple[InductionConstructor, ...]
+
+
+def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") -> InductionScheme:
+    if zero is None:
+        zero = Const("0")
+    return InductionScheme(
+        name="nat",
+        base_terms=(zero,),
+        constructors=(InductionConstructor(succ_symbol, 1, (0,)),),
+    )
+
+
+def vars_in_term(term: Term) -> set[str]:
+    match term:
+        case Var(n):
+            return {n}
+        case Fun(_, args):
+            out: set[str] = set()
+            for a in args:
+                out |= vars_in_term(a)
+            return out
+
+
+def vars_in_clause(clause: Clause) -> set[str]:
+    out = vars_in_term(clause.goal)
+    for l, r in clause.assumptions:
+        out |= vars_in_term(l)
+        out |= vars_in_term(r)
+    return out
+
+
+def instantiate_clause(clause: Clause, subst: Subst) -> Clause:
+    assumptions = tuple((apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.assumptions)
+    goal = apply_subst(clause.goal, subst)
+    return Clause(assumptions, goal)
+
+
+def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
+    match goal:
+        case Fun("eq", (l, r)):
+            return (l, r)
+    return None
+
+
+def fresh_var(base: str, used_names: set[str]) -> Var:
+    i = 0
+    while True:
+        name = f"{base}_{i}"
+        if name not in used_names:
+            used_names.add(name)
+            return Var(name)
+        i += 1
+
+
+def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+    used = vars_in_clause(clause).copy()
+    branches: list[Clause] = []
+
+    for b in scheme.base_terms:
+        branches.append(instantiate_clause(clause, {var: b}))
+
+    for cons in scheme.constructors:
+        rec_vars = [fresh_var(f"{var.name}_ih", used) for _ in cons.recursive_positions]
+        ih_assumptions: list[Tuple[Term, Term]] = []
+        for rv in rec_vars:
+            ih_goal = instantiate_clause(clause, {var: rv}).goal
+            eq = goal_equality(ih_goal)
+            if eq is None:
+                return []
+            ih_assumptions.append(eq)
+
+        args: list[Term] = [fresh_var(f"{var.name}_{cons.symbol}_arg", used) for _ in range(cons.arity)]
+        for pos, rv in zip(cons.recursive_positions, rec_vars):
+            args[pos] = rv
+
+        step_term = App(cons.symbol, *args)
+        step_clause = instantiate_clause(clause, {var: step_term})
+        branches.append(Clause(step_clause.assumptions + tuple(ih_assumptions), step_clause.goal))
+
+    return branches
+
+
 def simplify_clause(clause: Clause, rules):
     ctx = Context(clause.assumptions)
     new_goal = normalize(clause.goal, rules, ctx)
@@ -588,6 +683,30 @@ def prove(clause: Clause, rules, depth: int = 5) -> bool:
 
     next_depth = depth - 1
     return all(prove(branch, rules, next_depth) for branch in branches)
+
+
+def prove_with_induction(
+    clause: Clause,
+    rules,
+    var: Var,
+    scheme: InductionScheme,
+    depth: int = 5,
+    induction_depth: int = 1,
+) -> bool:
+    if prove(clause, rules, depth):
+        return True
+    if induction_depth <= 0:
+        return False
+
+    branches = induction_branches(clause, var, scheme)
+    if not branches:
+        return False
+
+    next_induction = induction_depth - 1
+    return all(
+        prove_with_induction(branch, rules, var, scheme, depth, next_induction)
+        for branch in branches
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -672,5 +791,24 @@ if __name__ == "__main__":
     # Test 13: equality closure x = y, y = 0 => x = 0
     clause3 = Clause(((x, y), (y, zero)), eq(x, zero))
     assert clause_solved(simplify_clause(clause3, rules))
+
+    # Test 14: induction obligations for nat produce base + step (with IH)
+    nat_scheme = nat_induction_scheme(zero)
+    clause4 = Clause((), eq(add(x, zero), x))
+    branches = induction_branches(clause4, x, nat_scheme)
+    assert len(branches) == 2
+    assert str(branches[0].goal) == "eq(add(0, 0), 0)"
+    assert str(branches[1].goal) == "eq(add(S(x_ih_0), 0), S(x_ih_0))"
+    assert len(branches[1].assumptions) == 1
+    ih_l, ih_r = branches[1].assumptions[0]
+    assert str(ih_l) == "add(x_ih_0, 0)"
+    assert str(ih_r) == "x_ih_0"
+
+    # Test 15: prove add(x, 0) = x by explicit nat induction
+    assert prove_with_induction(clause4, rules, x, nat_scheme, depth=8, induction_depth=1)
+
+    # Test 16: a clearly false ground goal is not proven
+    bad = Clause((), eq(add(zero, one), zero))
+    assert not prove(bad, rules, depth=8)
 
     print("All tests passed.")

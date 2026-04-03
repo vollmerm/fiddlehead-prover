@@ -11,7 +11,8 @@ Boyer–Moore style rewriting core with:
 - term indexing
 - ground-term caching
 - per-call memoization
-- conditional rewriting (FIXED)
+- conditional rewriting
+- negation and split
 """
 
 from dataclasses import dataclass
@@ -58,6 +59,19 @@ class Fun(Term):
 
 
 Fun._cache = WeakValueDictionary()
+
+
+# -----------------------------------------------------------------------------
+# DSL
+# -----------------------------------------------------------------------------
+
+
+def Const(n): return Fun(n, ())
+def App(f, *a): return Fun(f, a)
+
+true=Const("true")
+false=Const("false")
+
 
 # -----------------------------------------------------------------------------
 # Substitution
@@ -110,7 +124,17 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
 # LPO ordering
 # -----------------------------------------------------------------------------
 
-PRECEDENCE = {"add": 2, "S": 1, "0": 0}
+PRECEDENCE = {
+    "add": 3,
+    "S": 2,
+    "if": 1,
+    "eq": 1,
+    "neq": 1,
+    "0": 0,
+    "1": 0,
+    "true": 0,
+    "false": 0,
+}
 
 
 def prec(f: str):
@@ -176,12 +200,27 @@ class RuleIndex:
 
 
 # -----------------------------------------------------------------------------
+# Boolean + disequality rules
+# -----------------------------------------------------------------------------
+
+def builtin_rules():
+    x=Var("x"); y=Var("y")
+    return [
+        Rule(App("eq",x,x),true),
+        Rule(App("neq",x,x),false),
+        Rule(App("if",true,x,y),x),
+        Rule(App("if",false,x,y),y),
+    ]
+
+            
+# -----------------------------------------------------------------------------
 # Context
 # -----------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Context:
     equalities: Tuple[Tuple[Term, Term], ...] = ()
+    disequalities: Tuple[Tuple[Term,Term],...]=()
 
 
 def context_subst(ctx: Context) -> Subst:
@@ -200,6 +239,37 @@ def context_rules(ctx: Context):
             yield Rule(lhs, rhs)
         elif decreases(rhs, lhs):
             yield Rule(rhs, lhs)
+
+
+# -----------------------------------------------------------------------------
+# Conditions
+# -----------------------------------------------------------------------------
+
+def holds(l, r, rules, ctx):
+    l2 = normalize(l, rules, ctx)
+    r2 = normalize(r, rules, ctx)
+
+    if l2 == r2:
+        return True
+
+    for a, b in ctx.equalities:
+        if (l2 == a and r2 == b) or (l2 == b and r2 == a):
+            return True
+
+    for a, b in ctx.disequalities:
+        if (l2 == a and r2 == b) or (l2 == b and r2 == a):
+            return False
+
+    return False
+
+
+def conditions_hold(conditions, subst, rules, ctx):
+    for l, r in conditions:
+        l2 = apply_subst(l, subst)
+        r2 = apply_subst(r, subst)
+        if not holds(l2, r2, rules, ctx):
+            return False
+    return True
 
 
 # -----------------------------------------------------------------------------
@@ -277,20 +347,7 @@ class Trace:
     def add(self, b, a, r):
         self.steps.append(TraceStep(b, a, r))
 
-
-# -----------------------------------------------------------------------------
-# Conditions
-# -----------------------------------------------------------------------------
-
-def conditions_hold(conds, subst, rules, ctx):
-    for l, r in conds:
-        l2 = normalize(apply_subst(l, subst), rules, ctx)
-        r2 = normalize(apply_subst(r, subst), rules, ctx)
-        if l2 is not r2:
-            return False
-    return True
-
-
+        
 # -----------------------------------------------------------------------------
 # Rewriting
 # -----------------------------------------------------------------------------
@@ -396,20 +453,51 @@ def simplify_clause(clause: Clause, rules):
     return Clause(clause.assumptions, new_goal)
 
 
+# def clause_solved(clause: Clause) -> bool:
+#     match clause.goal:
+#         case Fun("eq", (l, r)):
+#             return l is r
+#     return False
+
+
 def clause_solved(clause: Clause) -> bool:
+    return clause.goal == true
+
+
+def split_clause(clause: Clause) -> list[Clause]:
+    """Split an if-goal into proof branches."""
     match clause.goal:
-        case Fun("eq", (l, r)):
-            return l is r
-    return False
+        case Fun("if", (cond, then_branch, else_branch)):
+            match cond:
+                case Fun("eq", (left, right)):
+                    then_assumptions = clause.assumptions + ((left, right),)
+                    return [
+                        Clause(then_assumptions, then_branch),
+                        Clause(clause.assumptions, else_branch),
+                    ]
+                case _:
+                    return [
+                        Clause(clause.assumptions, then_branch),
+                        Clause(clause.assumptions, else_branch),
+                    ]
+        case _:
+            return [clause]
 
 
-# -----------------------------------------------------------------------------
-# DSL
-# -----------------------------------------------------------------------------
+def prove(clause: Clause, rules, depth: int = 5) -> bool:
+    if depth <= 0:
+        return False
 
+    simplified = simplify_clause(clause, rules)
+    if clause_solved(simplified):
+        return True
 
-def Const(n): return Fun(n, ())
-def App(f, *a): return Fun(f, a)
+    branches = split_clause(simplified)
+    if len(branches) == 1:
+        return False
+
+    next_depth = depth - 1
+    return all(prove(branch, rules, next_depth) for branch in branches)
 
 
 # -----------------------------------------------------------------------------
@@ -423,16 +511,19 @@ if __name__ == "__main__":
 
     zero = Const("0")
     one = Const("1")
+    
     S = lambda t: App("S", t)
     add = lambda a, b: App("add", a, b)
     eq = lambda a, b: App("eq", a, b)
+    neq = lambda a,b:App("neq",a,b)
     f = lambda a: App("f", a)
+    ite = lambda c,t,e:App("if",c,t,e)
 
     r1 = Rule(add(zero, y), y)
     r2 = Rule(add(S(x), y), S(add(x, y)))
     r3 = Rule(f(x), one, conditions=((x, zero),))
 
-    rules = [r1, r2, r3]
+    rules = builtin_rules() + [r1, r2, r3]
 
     # Test 1
     t = add(S(S(zero)), S(zero))
@@ -465,6 +556,7 @@ if __name__ == "__main__":
 
     # Test 8
     clause2 = Clause((), eq(zero, zero))
+    print(simplify_clause(clause2, rules))
     assert clause_solved(simplify_clause(clause2, rules))
 
     # Test 9
@@ -479,9 +571,12 @@ if __name__ == "__main__":
     r2n = normalize(t, rules)
     assert r1n is r2n
 
-    # Test 11 (FIXED conditional rewriting)
+    # Test 11
     assert str(normalize(f(zero), rules)) == "1"
     assert str(normalize(f(S(zero)), rules)) == "f(S(0))"
 
-    print("All tests passed.")
+    # Test 12
+    assert normalize(eq(zero,zero),rules) == true
+    assert normalize(neq(zero,zero),rules) == false
 
+    print("All tests passed.")

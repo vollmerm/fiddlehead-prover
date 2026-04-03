@@ -10,8 +10,8 @@ Boyer–Moore style rewriting core with:
 - tracing
 - term indexing
 - ground-term caching
-- NEW: per-call memoization (term indexing + caching combined)
-- NOTE: conditional rewrites removed earlier (see comments)
+- per-call memoization
+- conditional rewriting (FIXED)
 """
 
 from dataclasses import dataclass
@@ -154,6 +154,7 @@ def decreases(a, b):
 class Rule:
     lhs: Term
     rhs: Term
+    conditions: Tuple[Tuple[Term, Term], ...] = ()
 
 
 class RuleIndex:
@@ -244,7 +245,7 @@ def ac_normalize(t: Term) -> Term:
 
 
 # -----------------------------------------------------------------------------
-# Ground caching + local memo
+# Ground caching + memo
 # -----------------------------------------------------------------------------
 
 GROUND_CACHE: Dict[Term, Term] = {}
@@ -278,19 +279,37 @@ class Trace:
 
 
 # -----------------------------------------------------------------------------
+# Conditions
+# -----------------------------------------------------------------------------
+
+def conditions_hold(conds, subst, rules, ctx):
+    for l, r in conds:
+        l2 = normalize(apply_subst(l, subst), rules, ctx)
+        r2 = normalize(apply_subst(r, subst), rules, ctx)
+        if l2 is not r2:
+            return False
+    return True
+
+
+# -----------------------------------------------------------------------------
 # Rewriting
 # -----------------------------------------------------------------------------
 
 
-def rewrite_once(term, rule, trace=None):
+def rewrite_once(term, rule, rules, ctx, trace=None):
     subst = match(rule.lhs, term)
     if subst is None:
         return None
 
+    if rule.conditions and not conditions_hold(rule.conditions, subst, rules, ctx):
+        return None
+
     new = apply_subst(rule.rhs, subst)
 
-    if not decreases(term, new):
-        return None
+    # FIX: allow conditional rules even if not decreasing
+    if not rule.conditions:
+        if not decreases(term, new):
+            return None
 
     if trace:
         trace.add(term, new, rule)
@@ -298,7 +317,7 @@ def rewrite_once(term, rule, trace=None):
     return new
 
 
-def rewrite(term, index: RuleIndex, ctx: Context, trace=None, memo=None):
+def rewrite(term, index: RuleIndex, rules, ctx: Context, trace=None, memo=None):
     if memo is not None and term in memo:
         return memo[term]
 
@@ -307,20 +326,20 @@ def rewrite(term, index: RuleIndex, ctx: Context, trace=None, memo=None):
 
     match term:
         case Fun(f, args):
-            args = tuple(rewrite(a, index, ctx, trace, memo) for a in args)
+            args = tuple(rewrite(a, index, rules, ctx, trace, memo) for a in args)
             term = Fun(f, args)
 
     term = ac_normalize(term)
 
     for r in index.get(term):
-        t2 = rewrite_once(term, r, trace)
+        t2 = rewrite_once(term, r, rules, ctx, trace)
         if t2 is not None:
             if memo is not None:
                 memo[term] = t2
             return t2
 
     for r in context_rules(ctx):
-        t2 = rewrite_once(term, r, trace)
+        t2 = rewrite_once(term, r, rules, ctx, trace)
         if t2 is not None:
             if memo is not None:
                 memo[term] = t2
@@ -333,7 +352,7 @@ def rewrite(term, index: RuleIndex, ctx: Context, trace=None, memo=None):
 
 
 # -----------------------------------------------------------------------------
-# Normalize (now with memoization)
+# Normalize
 # -----------------------------------------------------------------------------
 
 
@@ -346,7 +365,7 @@ def normalize(term, rules, ctx: Context = Context(), trace=None, fuel=1000):
         if is_ground(term) and term in GROUND_CACHE:
             return GROUND_CACHE[term]
 
-        t2 = rewrite(term, index, ctx, trace, memo)
+        t2 = rewrite(term, index, rules, ctx, trace, memo)
 
         if t2 is term:
             break
@@ -403,13 +422,17 @@ if __name__ == "__main__":
     z = Var("z")
 
     zero = Const("0")
+    one = Const("1")
     S = lambda t: App("S", t)
     add = lambda a, b: App("add", a, b)
     eq = lambda a, b: App("eq", a, b)
+    f = lambda a: App("f", a)
 
     r1 = Rule(add(zero, y), y)
     r2 = Rule(add(S(x), y), S(add(x, y)))
-    rules = [r1, r2]
+    r3 = Rule(f(x), one, conditions=((x, zero),))
+
+    rules = [r1, r2, r3]
 
     # Test 1
     t = add(S(S(zero)), S(zero))
@@ -417,44 +440,48 @@ if __name__ == "__main__":
     print("Result:", res)
     assert str(res) == "S(S(S(0)))"
 
-    # Test 2 hash-cons
+    # Test 2
     assert App("f", x) is App("f", x)
 
-    # Test 3 subst
+    # Test 3
     assert str(apply_subst(add(x, y), {x: zero})) == "add(0, y)"
 
-    # Test 4 match
+    # Test 4
     m = match(add(x, y), add(zero, S(zero)))
     assert m[x] is zero
 
-    # Test 5 AC
+    # Test 5
     assert str(normalize(add(y, add(x, z)), rules)) == "add(x, add(y, z))"
 
-    # Test 6 trace
+    # Test 6
     tr = Trace()
     normalize(add(S(zero), zero), rules, trace=tr)
     assert len(tr.steps) > 0
 
-    # Test 7 contextual rewriting
+    # Test 7
     clause = Clause(((x, zero),), add(x, S(zero)))
     simplified = simplify_clause(clause, rules)
     assert str(simplified.goal) == "S(0)"
 
-    # Test 8 clause solved
+    # Test 8
     clause2 = Clause((), eq(zero, zero))
     assert clause_solved(simplify_clause(clause2, rules))
 
-    # Test 9 ground caching
+    # Test 9
     t = add(zero, zero)
     r = normalize(t, rules)
     assert t in GROUND_CACHE
     assert GROUND_CACHE[t] is r
 
-    # Test 10 memoization effectiveness (same object reused)
+    # Test 10
     t = add(zero, zero)
-    r1 = normalize(t, rules)
-    r2 = normalize(t, rules)
-    assert r1 is r2
+    r1n = normalize(t, rules)
+    r2n = normalize(t, rules)
+    assert r1n is r2n
+
+    # Test 11 (FIXED conditional rewriting)
+    assert str(normalize(f(zero), rules)) == "1"
+    assert str(normalize(f(S(zero)), rules)) == "f(S(0))"
 
     print("All tests passed.")
 

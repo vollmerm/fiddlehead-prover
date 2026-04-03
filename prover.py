@@ -13,6 +13,7 @@ Boyer–Moore style rewriting core with:
 - per-call memoization
 - conditional rewriting
 - negation and split
+- congruence closure
 """
 
 from dataclasses import dataclass
@@ -223,12 +224,99 @@ class Context:
     disequalities: Tuple[Tuple[Term,Term],...]=()
 
 
-def context_subst(ctx: Context) -> Subst:
-    subst: Subst = {}
-    for lhs, rhs in ctx.equalities:
-        if isinstance(lhs, Var):
-            subst[lhs] = rhs
-    return subst
+class EqClasses:
+    def __init__(self):
+        self.parent: Dict[Term, Term] = {}
+        self.rank: Dict[Term, int] = {}
+        self.terms: set[Term] = set()
+        self.rep: Dict[Term, Term] = {}
+
+    def _ensure(self, t: Term):
+        if t not in self.parent:
+            self.parent[t] = t
+            self.rank[t] = 0
+            self.terms.add(t)
+            self.rep[t] = t
+
+    def _register(self, t: Term):
+        self._ensure(t)
+        match t:
+            case Fun(_, args):
+                for a in args:
+                    self._register(a)
+
+    def find(self, t: Term) -> Term:
+        self._ensure(t)
+        p = self.parent[t]
+        if p is not t:
+            self.parent[t] = self.find(p)
+        return self.parent[t]
+
+    def union(self, a: Term, b: Term) -> bool:
+        self._register(a)
+        self._register(b)
+        ra = self.find(a)
+        rb = self.find(b)
+        if ra is rb:
+            return False
+
+        if self.rank[ra] < self.rank[rb]:
+            ra, rb = rb, ra
+        elif self.rank[ra] == self.rank[rb] and term_key(rb) < term_key(ra):
+            ra, rb = rb, ra
+
+        self.parent[rb] = ra
+        if self.rank[ra] == self.rank[rb]:
+            self.rank[ra] += 1
+        if term_key(self.rep[rb]) < term_key(self.rep[ra]):
+            self.rep[ra] = self.rep[rb]
+        return True
+
+    def close_congruence(self):
+        changed = True
+        while changed:
+            changed = False
+            sig_to_term: Dict[Tuple[str, Tuple[Term, ...]], Term] = {}
+            for t in list(self.terms):
+                match t:
+                    case Fun(sym, args):
+                        sig = (sym, tuple(self.find(a) for a in args))
+                        other = sig_to_term.get(sig)
+                        if other is None:
+                            sig_to_term[sig] = t
+                        elif self.union(t, other):
+                            changed = True
+
+    def canonical(self, t: Term) -> Term:
+        self._register(t)
+        self.close_congruence()
+        match t:
+            case Var():
+                return self.rep[self.find(t)]
+            case Fun(sym, args):
+                args2 = tuple(self.canonical(a) for a in args)
+                rebuilt = Fun(sym, args2)
+                self._register(rebuilt)
+                self.close_congruence()
+                return self.rep[self.find(rebuilt)]
+
+    def are_equal(self, a: Term, b: Term) -> bool:
+        return self.canonical(a) is self.canonical(b)
+
+
+def build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClasses:
+    eq = EqClasses()
+    for l, r in ctx.equalities:
+        eq._register(l)
+        eq._register(r)
+        eq.union(l, r)
+    for l, r in ctx.disequalities:
+        eq._register(l)
+        eq._register(r)
+    for t in extra_terms:
+        eq._register(t)
+    eq.close_congruence()
+    return eq
 
 
 def context_rules(ctx: Context):
@@ -245,29 +333,28 @@ def context_rules(ctx: Context):
 # Conditions
 # -----------------------------------------------------------------------------
 
-def holds(l, r, rules, ctx):
+def holds(l, r, rules, ctx, eq_classes: Optional[EqClasses] = None):
     l2 = normalize(l, rules, ctx)
     r2 = normalize(r, rules, ctx)
-
-    if l2 == r2:
-        return True
-
-    for a, b in ctx.equalities:
-        if (l2 == a and r2 == b) or (l2 == b and r2 == a):
-            return True
+    eq = eq_classes if eq_classes is not None else build_eq_classes(ctx, (l2, r2))
 
     for a, b in ctx.disequalities:
-        if (l2 == a and r2 == b) or (l2 == b and r2 == a):
+        if eq.are_equal(l2, a) and eq.are_equal(r2, b):
             return False
+        if eq.are_equal(l2, b) and eq.are_equal(r2, a):
+            return False
+
+    if eq.are_equal(l2, r2):
+        return True
 
     return False
 
 
-def conditions_hold(conditions, subst, rules, ctx):
+def conditions_hold(conditions, subst, rules, ctx, eq_classes: Optional[EqClasses] = None):
     for l, r in conditions:
         l2 = apply_subst(l, subst)
         r2 = apply_subst(r, subst)
-        if not holds(l2, r2, rules, ctx):
+        if not holds(l2, r2, rules, ctx, eq_classes):
             return False
     return True
 
@@ -282,10 +369,10 @@ COMM = {"add"}
 
 def term_key(t: Term):
     match t:
-        case Var(n):
-            return (0, n)
         case Fun(f, args):
-            return (1, f, tuple(term_key(a) for a in args))
+            return (0, f, len(args), tuple(term_key(a) for a in args))
+        case Var(n):
+            return (1, n)
 
 
 def ac_normalize(t: Term) -> Term:
@@ -353,12 +440,12 @@ class Trace:
 # -----------------------------------------------------------------------------
 
 
-def rewrite_once(term, rule, rules, ctx, trace=None):
+def rewrite_once(term, rule, rules, ctx, trace=None, eq_classes: Optional[EqClasses] = None):
     subst = match(rule.lhs, term)
     if subst is None:
         return None
 
-    if rule.conditions and not conditions_hold(rule.conditions, subst, rules, ctx):
+    if rule.conditions and not conditions_hold(rule.conditions, subst, rules, ctx, eq_classes):
         return None
 
     new = apply_subst(rule.rhs, subst)
@@ -374,29 +461,31 @@ def rewrite_once(term, rule, rules, ctx, trace=None):
     return new
 
 
-def rewrite(term, index: RuleIndex, rules, ctx: Context, trace=None, memo=None):
+def rewrite(term, index: RuleIndex, rules, ctx: Context, trace=None, memo=None, eq_classes: Optional[EqClasses] = None):
     if memo is not None and term in memo:
         return memo[term]
 
-    subst = context_subst(ctx)
-    term = apply_subst(term, subst)
+    if eq_classes is not None:
+        term = eq_classes.canonical(term)
 
     match term:
         case Fun(f, args):
-            args = tuple(rewrite(a, index, rules, ctx, trace, memo) for a in args)
+            args = tuple(rewrite(a, index, rules, ctx, trace, memo, eq_classes) for a in args)
             term = Fun(f, args)
 
     term = ac_normalize(term)
+    if eq_classes is not None:
+        term = eq_classes.canonical(term)
 
     for r in index.get(term):
-        t2 = rewrite_once(term, r, rules, ctx, trace)
+        t2 = rewrite_once(term, r, rules, ctx, trace, eq_classes)
         if t2 is not None:
             if memo is not None:
                 memo[term] = t2
             return t2
 
     for r in context_rules(ctx):
-        t2 = rewrite_once(term, r, rules, ctx, trace)
+        t2 = rewrite_once(term, r, rules, ctx, trace, eq_classes)
         if t2 is not None:
             if memo is not None:
                 memo[term] = t2
@@ -417,12 +506,13 @@ def normalize(term, rules, ctx: Context = Context(), trace=None, fuel=1000):
     index = RuleIndex(rules)
     memo: Dict[Term, Term] = {}
     original = term
+    eq_classes = build_eq_classes(ctx, (term,))
 
     for _ in range(fuel):
         if is_ground(term) and term in GROUND_CACHE:
             return GROUND_CACHE[term]
 
-        t2 = rewrite(term, index, rules, ctx, trace, memo)
+        t2 = rewrite(term, index, rules, ctx, trace, memo, eq_classes)
 
         if t2 is term:
             break
@@ -578,5 +668,9 @@ if __name__ == "__main__":
     # Test 12
     assert normalize(eq(zero,zero),rules) == true
     assert normalize(neq(zero,zero),rules) == false
+
+    # Test 13: equality closure x = y, y = 0 => x = 0
+    clause3 = Clause(((x, y), (y, zero)), eq(x, zero))
+    assert clause_solved(simplify_clause(clause3, rules))
 
     print("All tests passed.")

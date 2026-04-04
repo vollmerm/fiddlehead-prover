@@ -59,6 +59,7 @@ __all__ = [
     "render_proof_trace",
     "prove_with_trace",
     "ProofCertificate",
+    "certificate_to_proof_trace",
     "prove_checked",
     "check_certificate",
     "Lemma",
@@ -1210,6 +1211,27 @@ def check_certificate(
     return _check_certificate_node(cert, engine, depth, induction_depth)
 
 
+def _certificate_to_proof_node(cert: ProofCertificate) -> ProofNode:
+    note = ""
+    if cert.step == "induction":
+        note = f"var={cert.var.name if cert.var is not None else '?'}, scheme={cert.scheme_name}"
+    node = _new_node(f"checked-{cert.step}", cert.clause, note=note)
+    node.children.append(_new_node("checked-simplify", cert.simplified))
+    for child in cert.children:
+        node.children.append(_certificate_to_proof_node(child))
+    if cert.step == "solved":
+        node.solved = True
+    else:
+        node.solved = all(c.solved is True for c in node.children[1:]) if cert.children else False
+    return node
+
+
+def certificate_to_proof_trace(cert: ProofCertificate) -> ProofTrace:
+    trace = ProofTrace()
+    trace.roots.append(_certificate_to_proof_node(cert))
+    return trace
+
+
 @dataclass(frozen=True)
 class Lemma:
     name: str
@@ -1222,6 +1244,16 @@ class ProofSession:
         self.engine = engine
         self.goals: list[Clause] = [clause]
         self.lemmas: Dict[str, Lemma] = {}
+        self.trace = ProofTrace()
+        self._trace_root = _new_node("session", clause, note="interactive")
+        self.trace.roots.append(self._trace_root)
+
+    def _record(self, kind: str, clause: Clause, note: str = "", solved: Optional[bool] = None, children: Optional[list[ProofNode]] = None):
+        node = _new_node(kind, clause, note=note)
+        if children:
+            node.children.extend(children)
+        node.solved = solved
+        self._trace_root.children.append(node)
 
     def current_goal(self) -> Optional[Clause]:
         if not self.goals:
@@ -1234,38 +1266,52 @@ class ProofSession:
     def simp(self):
         if not self.goals:
             raise ValueError("No goals left.")
-        simplified = _check_simplify_step(self.goals[0], self.engine)
+        original = self.goals[0]
+        simplified = _check_simplify_step(original, self.engine)
         if clause_solved(simplified):
+            self._record("session-simp", original, note="discharged", solved=True, children=[_new_node("goal", simplified)])
             self.goals = self.goals[1:]
             return
+        self._record("session-simp", original, solved=False, children=[_new_node("goal", simplified)])
         self.goals[0] = simplified
 
     def split(self):
         if not self.goals:
             raise ValueError("No goals left.")
-        branches = _check_split_step(self.goals[0])
+        original = self.goals[0]
+        branches = _check_split_step(original)
+        kids = [_new_node("session-branch", b, note=f"index={i}") for i, b in enumerate(branches)]
+        self._record("session-split", original, note=f"branches={len(branches)}", children=kids)
         self._replace_current(branches)
 
     def induct(self, var: Var, scheme: Optional[InductionScheme] = None, scheme_name: Optional[str] = None):
         if not self.goals:
             raise ValueError("No goals left.")
+        original = self.goals[0]
         chosen = scheme
         if chosen is None and scheme_name is not None:
             chosen = get_induction_scheme(self.engine, scheme_name)
         if chosen is None:
             raise ValueError("No induction scheme provided.")
-        branches = _check_induction_step(self.goals[0], var, chosen)
+        branches = _check_induction_step(original, var, chosen)
+        kids = [_new_node("induction-branch", b, note=f"index={i}") for i, b in enumerate(branches)]
+        self._record("session-induct", original, note=f"var={var.name}, scheme={chosen.name}", children=kids)
         self._replace_current(branches)
 
     def rewrite(self, rule: Rule):
         if not self.goals:
             raise ValueError("No goals left.")
-        self.goals[0] = _check_rewrite_step(self.goals[0], rule, self.engine)
+        original = self.goals[0]
+        rewritten = _check_rewrite_step(original, rule, self.engine)
+        self._record("session-rewrite", original, note=f"{rule.lhs} -> {rule.rhs}", children=[_new_node("goal", rewritten)])
+        self.goals[0] = rewritten
 
     def exact(self):
         if not self.goals:
             raise ValueError("No goals left.")
-        _check_exact_step(self.goals[0], self.engine)
+        original = self.goals[0]
+        solved = _check_exact_step(original, self.engine)
+        self._record("session-exact", original, solved=True, children=[_new_node("goal", solved)])
         self.goals = self.goals[1:]
 
     def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2):
@@ -1282,17 +1328,23 @@ class ProofSession:
     def apply_lemma(self, name: str):
         if not self.goals:
             raise ValueError("No goals left.")
+        original = self.goals[0]
         lemma = self.lemmas.get(name)
         if lemma is None:
             raise ValueError(f"Unknown lemma: {name}")
         eq_goal = goal_equality(lemma.clause.goal)
         assert eq_goal is not None
-        cur = self.goals[0]
+        cur = original
         assumptions = cur.assumptions + (eq_goal,)
-        self.goals[0] = Clause(assumptions, cur.goal)
+        next_goal = Clause(assumptions, cur.goal)
+        self._record("session-apply-lemma", original, note=name, children=[_new_node("goal", next_goal)])
+        self.goals[0] = next_goal
 
     def qed(self) -> bool:
-        return not self.goals
+        done = not self.goals
+        current = self.current_goal() or Clause((), true)
+        self._record("session-qed", current, solved=done)
+        return done
 
 
 # -----------------------------------------------------------------------------
@@ -1558,6 +1610,20 @@ if __name__ == "__main__":
     if sess2.goals:
         sess2.exact()
     assert sess2.qed()
+
+    # Test 34: certificates can be rendered through proof-trace adapter
+    ok_assoc_cert, assoc_cert = prove_checked(assoc_goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1)
+    assert ok_assoc_cert and assoc_cert is not None
+    cert_trace = certificate_to_proof_trace(assoc_cert)
+    cert_rendered = render_proof_trace(cert_trace)
+    assert "checked-induction" in cert_rendered
+    assert "checked-simplify" in cert_rendered
+
+    # Test 35: interactive session produces a readable proof trace
+    sess_trace_rendered = render_proof_trace(sess.trace)
+    assert "session-induct" in sess_trace_rendered
+    assert "session-simp" in sess_trace_rendered
+    assert "session-exact" in sess_trace_rendered
 
     print("\nAppend associativity proof trace:")
     print(rendered)

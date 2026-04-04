@@ -25,7 +25,7 @@ Public API (small, stable surface):
 - checked proving entry points: prove_checked, check_certificate
 - typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
-- theorem environment/session: get_theorem_environment, TheoremEnvironment, ProofSession
+- theory + theorem environment/session: Theory, load_theory_module, get_theorem_environment, TheoremEnvironment, ProofSession
 """
 
 from dataclasses import dataclass
@@ -78,6 +78,9 @@ __all__ = [
     "prove_checked",
     "check_certificate",
     "Lemma",
+    "Theory",
+    "theory_from_module",
+    "load_theory_module",
     "TheoremEnvironment",
     "get_theorem_environment",
     "ProofSession",
@@ -720,13 +723,23 @@ def infer_sort(term: Term, engine: "Engine") -> str:
             return str(t)
 
 
-def _validate_equality_pair(lhs: Term, rhs: Term, engine: "Engine", where: str):
+def _infer_pair_with_shared_env(
+    lhs: Term,
+    rhs: Term,
+    engine: "Engine",
+    where: str,
+) -> tuple[TypeTerm, TypeTerm, Dict[TypeVar, TypeTerm]]:
     subst: Dict[TypeVar, TypeTerm] = {}
     counter = [0]
     env: Dict[Var, TypeTerm] = {}
     l_t = _infer_type_inner(lhs, engine, env, subst, counter)
     r_t = _infer_type_inner(rhs, engine, env, subst, counter)
     _unify_types(l_t, r_t, subst, where)
+    return _apply_type_subst(l_t, subst), _apply_type_subst(r_t, subst), subst
+
+
+def _validate_equality_pair(lhs: Term, rhs: Term, engine: "Engine", where: str):
+    _infer_pair_with_shared_env(lhs, rhs, engine, where)
 
 
 def _validate_rule_sorts(rule: Rule, engine: "Engine", where: str):
@@ -1638,6 +1651,41 @@ class Lemma:
     certificate: ProofCertificate
 
 
+@dataclass(frozen=True)
+class Theory:
+    name: str
+    version: str = "0.0.1"
+    depends_on: Tuple[str, ...] = ()
+    sort_signatures: Dict[str, SortSignature] = None
+    rules: Tuple[Rule, ...] = ()
+    definitions: Dict[str, Rule] = None
+    lemmas: Tuple[Lemma, ...] = ()
+    schemes: Tuple[InductionScheme, ...] = ()
+    default_scopes: Tuple[str, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(self, "sort_signatures", dict(self.sort_signatures or {}))
+        object.__setattr__(self, "rules", tuple(self.rules))
+        object.__setattr__(self, "definitions", dict(self.definitions or {}))
+        object.__setattr__(self, "lemmas", tuple(self.lemmas))
+        object.__setattr__(self, "schemes", tuple(self.schemes))
+        object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
+
+
+def theory_from_module(module) -> Theory:
+    theory = getattr(module, "THEORY", None)
+    if not isinstance(theory, Theory):
+        raise ValueError("Theory module must export THEORY: Theory.")
+    return theory
+
+
+def load_theory_module(module_name: str) -> Theory:
+    import importlib
+
+    return theory_from_module(importlib.import_module(module_name))
+
+
 def _contains_symbol(term: Term, symbol: str) -> bool:
     match term:
         case Var():
@@ -2417,6 +2465,28 @@ if __name__ == "__main__":
     # Test 51: ambiguous standalone type inference is rejected by infer_sort
     try:
         infer_sort(x, engine)
+        assert False
+    except ValueError:
+        pass
+
+    # Test 52: Theory model captures modular payloads and module export convention
+    toy_theory = Theory(
+        name="toy.arith",
+        version="1.0.0",
+        depends_on=("core.peano>=1.0.0",),
+        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        rules=(Rule(App("double", x), add(x, x)),),
+        definitions={"double": Rule(App("double", x), add(x, x))},
+        schemes=(nat_scheme,),
+        default_scopes=("toy_scope",),
+    )
+    assert toy_theory.name == "toy.arith"
+    assert toy_theory.rules[0].lhs == App("double", x)
+    assert toy_theory.definitions["double"].rhs == add(x, x)
+    _ToyModule = type("_ToyModule", (), {"THEORY": toy_theory})
+    assert theory_from_module(_ToyModule) is toy_theory
+    try:
+        theory_from_module(object())
         assert False
     except ValueError:
         pass

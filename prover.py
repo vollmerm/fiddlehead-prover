@@ -667,18 +667,22 @@ class Engine:
 
     def normalize(self, term: Term):
         original = term
+        original_is_ground = is_ground(original)
         self._ensure_eq_classes(term)
 
         for _ in range(self.fuel):
             if is_ground(term) and term in self.ground_cache:
-                return self.ground_cache[term]
+                cached = self.ground_cache[term]
+                if original_is_ground:
+                    self.ground_cache[original] = cached
+                return cached
 
             t2 = self.rewrite_term(term)
             if t2 is term:
                 break
             term = t2
 
-        if is_ground(original):
+        if original_is_ground:
             self.ground_cache[original] = term
         if is_ground(term):
             self.ground_cache[term] = term
@@ -873,17 +877,76 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
 
 
 def simplify_clause(clause: Clause, engine: Engine):
+    simplified, _ = simplify_clause_with_stages(clause, engine)
+    return simplified
+
+
+def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause, list[tuple[str, Clause]]]:
+    stages: list[tuple[str, Clause]] = []
+
+    # Stage 1: normalize and deduplicate assumptions using rewrite rules only.
+    assumptions = _simplify_assumptions(clause.assumptions, engine)
+    stage_clause = Clause(assumptions, clause.goal)
+    stages.append(("assumptions", stage_clause))
+
+    # Stage 2: normalize the goal with rule-only rewriting before contextual reasoning.
+    base_goal = _normalize_with_rules_only(stage_clause.goal, engine)
+    stage_clause = Clause(assumptions, base_goal)
+    stages.append(("rule-goal", stage_clause))
+
+    # Stage 3: contextual normalization (includes conditional rewrites + congruence closure).
     local_engine = make_engine(
         rules=engine.rules,
-        ctx=Context(clause.assumptions),
+        ctx=Context(assumptions),
         trace=engine.trace,
         fuel=engine.fuel,
         config=engine.config,
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
     )
-    new_goal = normalize(clause.goal, local_engine)
-    return Clause(clause.assumptions, new_goal)
+    contextual_goal = normalize(base_goal, local_engine)
+    stage_clause = Clause(assumptions, contextual_goal)
+    stages.append(("context-goal", stage_clause))
+
+    # Stage 4: if equality already follows from assumptions, close to true explicitly.
+    eq_goal = goal_equality(contextual_goal)
+    if eq_goal is not None and local_engine.holds(eq_goal[0], eq_goal[1]):
+        stage_clause = Clause(assumptions, true)
+        stages.append(("context-solved", stage_clause))
+
+    return stage_clause, stages
+
+
+def _normalize_with_rules_only(term: Term, engine: Engine) -> Term:
+    base_engine = make_engine(
+        rules=engine.rules,
+        ctx=Context(),
+        trace=engine.trace,
+        fuel=engine.fuel,
+        config=engine.config,
+        ground_cache=engine.ground_cache,
+        schemes=engine.schemes,
+    )
+    return normalize(term, base_engine)
+
+
+def _simplify_assumptions(
+    assumptions: Tuple[Tuple[Term, Term], ...],
+    engine: Engine,
+) -> Tuple[Tuple[Term, Term], ...]:
+    seen: set[tuple[Term, Term]] = set()
+    out: list[tuple[Term, Term]] = []
+    for lhs, rhs in assumptions:
+        l2 = _normalize_with_rules_only(lhs, engine)
+        r2 = _normalize_with_rules_only(rhs, engine)
+        if l2 == r2:
+            continue
+        pair = (l2, r2) if _term_key(l2) <= _term_key(r2) else (r2, l2)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return tuple(out)
 
 
 # def clause_solved(clause: Clause) -> bool:
@@ -1444,12 +1507,13 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        simplified = _check_simplify_step(original, self.engine)
+        simplified, stage_data = simplify_clause_with_stages(original, self.engine)
+        stage_nodes = [_new_node(f"stage-{name}", c) for name, c in stage_data]
         if clause_solved(simplified):
-            self._record("session-simp", original, note="discharged", solved=True, children=[_new_node("goal", simplified)])
+            self._record("session-simp", original, note="discharged", solved=True, children=stage_nodes + [_new_node("goal", simplified)])
             self.goals = self.goals[1:]
             return
-        self._record("session-simp", original, solved=False, children=[_new_node("goal", simplified)])
+        self._record("session-simp", original, solved=False, children=stage_nodes + [_new_node("goal", simplified)])
         self.goals[0] = simplified
 
     def split(self):
@@ -1934,6 +1998,20 @@ if __name__ == "__main__":
         assert False
     except ValueError:
         pass
+
+    # Test 44: simplifier deduplicates and canonicalizes assumptions safely
+    dup_clause = Clause(((x, y), (y, x), (x, y)), eq(x, y))
+    dup_simplified = simplify_clause(dup_clause, engine)
+    assert len(dup_simplified.assumptions) == 1
+    assert dup_simplified.assumptions[0] == (x, y)
+
+    # Test 45: simplifier stages are exposed in session trace
+    sess_stages = ProofSession(dup_clause, engine)
+    sess_stages.simp()
+    sess_stages_rendered = render_proof_trace(sess_stages.trace)
+    assert "stage-assumptions" in sess_stages_rendered
+    assert "stage-rule-goal" in sess_stages_rendered
+    assert "stage-context-goal" in sess_stages_rendered
 
     print("\nAppend associativity proof trace:")
     print(rendered)

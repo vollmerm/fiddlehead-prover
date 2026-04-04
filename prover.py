@@ -49,6 +49,7 @@ __all__ = [
     "make_engine",
     "EngineConfig",
     "default_engine_config",
+    "builtin_rules",
     "normalize",
     "prove",
     "prove_with_induction",
@@ -57,6 +58,11 @@ __all__ = [
     "ProofNode",
     "render_proof_trace",
     "prove_with_trace",
+    "ProofCertificate",
+    "prove_checked",
+    "check_certificate",
+    "Lemma",
+    "ProofSession",
 ]
 
 # -----------------------------------------------------------------------------
@@ -1026,6 +1032,270 @@ def prove_with_trace(
 
 
 # -----------------------------------------------------------------------------
+# Trusted proof checking + certificates
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ProofCertificate:
+    clause: Clause
+    simplified: Clause
+    step: str  # solved | split | induction
+    children: Tuple["ProofCertificate", ...] = ()
+    var: Optional[Var] = None
+    scheme_name: Optional[str] = None
+
+
+def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
+    return make_engine(
+        rules=engine.rules,
+        ctx=Context(clause.assumptions, ()),
+        trace=engine.trace,
+        fuel=engine.fuel,
+        config=engine.config,
+        ground_cache=engine.ground_cache,
+        schemes=engine.schemes,
+    )
+
+
+def _check_simplify_step(clause: Clause, engine: Engine) -> Clause:
+    return simplify_clause(clause, engine)
+
+
+def _check_split_step(clause: Clause) -> list[Clause]:
+    return split_clause(clause)
+
+
+def _check_induction_step(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+    branches = induction_branches(clause, var, scheme)
+    if not branches:
+        raise ValueError("Induction does not apply to this goal/scheme.")
+    return branches
+
+
+def _goal_holds_in_assumptions(clause: Clause, engine: Engine) -> bool:
+    eq_goal = goal_equality(clause.goal)
+    if eq_goal is None:
+        return False
+    l, r = eq_goal
+    local = _local_engine_for_clause(clause, engine)
+    return local.holds(l, r)
+
+
+def _check_exact_step(clause: Clause, engine: Engine) -> Clause:
+    if clause_solved(clause) or _goal_holds_in_assumptions(clause, engine):
+        return Clause(clause.assumptions, true)
+    raise ValueError("Goal is not solved and does not follow from assumptions.")
+
+
+def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
+    local = _local_engine_for_clause(clause, engine)
+    rewritten = local.rewrite_once(clause.goal, rule)
+    if rewritten is None:
+        raise ValueError("Rewrite rule does not apply to current goal.")
+    return Clause(clause.assumptions, rewritten)
+
+
+def _prove_certificate_kernel(
+    clause: Clause,
+    engine: Engine,
+    depth: int,
+    var: Optional[Var],
+    scheme: Optional[InductionScheme],
+    induction_depth: int,
+) -> Optional[ProofCertificate]:
+    if depth <= 0:
+        return None
+
+    simplified = _check_simplify_step(clause, engine)
+    if clause_solved(simplified):
+        return ProofCertificate(clause=clause, simplified=simplified, step="solved")
+
+    branches = _check_split_step(simplified)
+    if len(branches) > 1:
+        children: list[ProofCertificate] = []
+        for branch in branches:
+            child = _prove_certificate_kernel(branch, engine, depth - 1, var, scheme, induction_depth)
+            if child is None:
+                return None
+            children.append(child)
+        return ProofCertificate(clause=clause, simplified=simplified, step="split", children=tuple(children))
+
+    if var is not None and scheme is not None and induction_depth > 0:
+        induction_goals = induction_branches(simplified, var, scheme)
+        if induction_goals:
+            children = []
+            for branch in induction_goals:
+                child = _prove_certificate_kernel(branch, engine, depth, var, scheme, induction_depth - 1)
+                if child is None:
+                    return None
+                children.append(child)
+            return ProofCertificate(
+                clause=clause,
+                simplified=simplified,
+                step="induction",
+                children=tuple(children),
+                var=var,
+                scheme_name=scheme.name,
+            )
+
+    return None
+
+
+def prove_checked(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    var: Optional[Var] = None,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+    induction_depth: int = 1,
+) -> tuple[bool, Optional[ProofCertificate]]:
+    if var is not None and scheme is None and scheme_name is not None:
+        scheme = get_induction_scheme(engine, scheme_name)
+    if var is not None and scheme is None:
+        return False, None
+    if var is not None and scheme is not None and not var_matches_scheme(var, scheme):
+        return False, None
+
+    cert = _prove_certificate_kernel(clause, engine, depth, var, scheme, induction_depth)
+    return cert is not None, cert
+
+
+def _check_certificate_node(
+    cert: ProofCertificate,
+    engine: Engine,
+    depth: int,
+    induction_depth: int,
+) -> bool:
+    if depth <= 0:
+        return False
+
+    expected_simplified = _check_simplify_step(cert.clause, engine)
+    if expected_simplified != cert.simplified:
+        return False
+
+    if cert.step == "solved":
+        return clause_solved(cert.simplified) and not cert.children
+
+    if cert.step == "split":
+        branches = _check_split_step(cert.simplified)
+        if len(branches) <= 1 or len(branches) != len(cert.children):
+            return False
+        if any(child.clause != branch for child, branch in zip(cert.children, branches)):
+            return False
+        return all(_check_certificate_node(child, engine, depth - 1, induction_depth) for child in cert.children)
+
+    if cert.step == "induction":
+        if cert.var is None or cert.scheme_name is None or induction_depth <= 0:
+            return False
+        scheme = get_induction_scheme(engine, cert.scheme_name)
+        if scheme is None or not var_matches_scheme(cert.var, scheme):
+            return False
+        branches = induction_branches(cert.simplified, cert.var, scheme)
+        if len(branches) != len(cert.children):
+            return False
+        if any(child.clause != branch for child, branch in zip(cert.children, branches)):
+            return False
+        return all(_check_certificate_node(child, engine, depth, induction_depth - 1) for child in cert.children)
+
+    return False
+
+
+def check_certificate(
+    cert: ProofCertificate,
+    engine: Engine,
+    depth: int = 5,
+    induction_depth: int = 1,
+) -> bool:
+    return _check_certificate_node(cert, engine, depth, induction_depth)
+
+
+@dataclass(frozen=True)
+class Lemma:
+    name: str
+    clause: Clause
+    certificate: ProofCertificate
+
+
+class ProofSession:
+    def __init__(self, clause: Clause, engine: Engine):
+        self.engine = engine
+        self.goals: list[Clause] = [clause]
+        self.lemmas: Dict[str, Lemma] = {}
+
+    def current_goal(self) -> Optional[Clause]:
+        if not self.goals:
+            return None
+        return self.goals[0]
+
+    def _replace_current(self, new_goals: list[Clause]):
+        self.goals = new_goals + self.goals[1:]
+
+    def simp(self):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        simplified = _check_simplify_step(self.goals[0], self.engine)
+        if clause_solved(simplified):
+            self.goals = self.goals[1:]
+            return
+        self.goals[0] = simplified
+
+    def split(self):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        branches = _check_split_step(self.goals[0])
+        self._replace_current(branches)
+
+    def induct(self, var: Var, scheme: Optional[InductionScheme] = None, scheme_name: Optional[str] = None):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        chosen = scheme
+        if chosen is None and scheme_name is not None:
+            chosen = get_induction_scheme(self.engine, scheme_name)
+        if chosen is None:
+            raise ValueError("No induction scheme provided.")
+        branches = _check_induction_step(self.goals[0], var, chosen)
+        self._replace_current(branches)
+
+    def rewrite(self, rule: Rule):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        self.goals[0] = _check_rewrite_step(self.goals[0], rule, self.engine)
+
+    def exact(self):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        _check_exact_step(self.goals[0], self.engine)
+        self.goals = self.goals[1:]
+
+    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2):
+        if lemma.clause.assumptions:
+            raise ValueError("Only assumption-free lemmas can be registered in this minimal session.")
+        if goal_equality(lemma.clause.goal) is None:
+            raise ValueError("Lemma goal must be an equality.")
+        if lemma.certificate.clause != lemma.clause:
+            raise ValueError("Lemma certificate root does not match lemma clause.")
+        if not check_certificate(lemma.certificate, self.engine, depth=depth, induction_depth=induction_depth):
+            raise ValueError("Lemma certificate failed validation.")
+        self.lemmas[lemma.name] = lemma
+
+    def apply_lemma(self, name: str):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        lemma = self.lemmas.get(name)
+        if lemma is None:
+            raise ValueError(f"Unknown lemma: {name}")
+        eq_goal = goal_equality(lemma.clause.goal)
+        assert eq_goal is not None
+        cur = self.goals[0]
+        assumptions = cur.assumptions + (eq_goal,)
+        self.goals[0] = Clause(assumptions, cur.goal)
+
+    def qed(self) -> bool:
+        return not self.goals
+
+
+# -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
 
@@ -1253,6 +1523,41 @@ if __name__ == "__main__":
     assert "induction" in rendered
     assert "scheme=list" in rendered
     assert "induction-branch" in rendered
+
+    # Test 30: checked proof certificate can be produced and replay-validated
+    ok_cert, cert = prove_checked(clause4, engine, depth=8, var=x, scheme=nat_scheme, induction_depth=1)
+    assert ok_cert and cert is not None
+    assert check_certificate(cert, engine, depth=8, induction_depth=1)
+
+    # Test 31: tampered certificates are rejected by checker
+    bad_cert = ProofCertificate(
+        clause=cert.clause,
+        simplified=Clause(cert.simplified.assumptions, false),
+        step=cert.step,
+        children=cert.children,
+        var=cert.var,
+        scheme_name=cert.scheme_name,
+    )
+    assert not check_certificate(bad_cert, engine, depth=8, induction_depth=1)
+
+    # Test 32: interactive session can prove add(x, 0) = x by induction
+    sess = ProofSession(clause4, engine)
+    sess.induct(x, scheme=nat_scheme)
+    while sess.goals:
+        sess.simp()
+        if sess.goals:
+            sess.exact()
+    assert sess.qed()
+
+    # Test 33: interactive session supports checked lemma registration/application
+    lemma = Lemma("add_right_id", clause4, cert)
+    sess2 = ProofSession(Clause((), eq(add(S(zero), zero), S(zero))), engine)
+    sess2.register_lemma(lemma, depth=8, induction_depth=1)
+    sess2.apply_lemma("add_right_id")
+    sess2.simp()
+    if sess2.goals:
+        sess2.exact()
+    assert sess2.qed()
 
     print("\nAppend associativity proof trace:")
     print(rendered)

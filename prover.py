@@ -52,8 +52,13 @@ __all__ = [
     "get_induction_scheme_for_sort",
     "make_engine",
     "EngineConfig",
+    "SortSignature",
     "default_engine_config",
+    "default_sort_signatures",
     "builtin_rules",
+    "register_sort_signature",
+    "get_sort_signature",
+    "infer_sort",
     "normalize",
     "prove",
     "prove_with_induction",
@@ -324,6 +329,30 @@ def default_engine_config() -> EngineConfig:
     )
 
 
+@dataclass(frozen=True)
+class SortSignature:
+    arg_sorts: Tuple[Optional[str], ...]
+    result_sort: Optional[str]
+
+
+def default_sort_signatures() -> Dict[str, SortSignature]:
+    return {
+        "0": SortSignature((), "Nat"),
+        "1": SortSignature((), "Nat"),
+        "true": SortSignature((), "Bool"),
+        "false": SortSignature((), "Bool"),
+        "S": SortSignature(("Nat",), "Nat"),
+        "add": SortSignature(("Nat", "Nat"), "Nat"),
+        "nil": SortSignature((), "List"),
+        "cons": SortSignature((None, "List"), "List"),
+        "append": SortSignature(("List", "List"), "List"),
+        "length": SortSignature(("List",), "Nat"),
+        "eq": SortSignature((None, None), "Bool"),
+        "neq": SortSignature((None, None), "Bool"),
+        "if": SortSignature(("Bool", None, None), None),
+    }
+
+
 class EqClasses:
     def __init__(self):
         self.parent: Dict[Term, Term] = {}
@@ -498,6 +527,89 @@ def is_ground(t: Term) -> bool:
             return all(is_ground(a) for a in args)
 
 
+def _validate_declared_arg_sort(
+    expected: Optional[str],
+    actual: Optional[str],
+    symbol: str,
+    index: int,
+):
+    if expected is not None and actual is not None and expected != actual:
+        raise ValueError(
+            f"Ill-sorted term: {symbol} argument {index} expects {expected}, got {actual}."
+        )
+
+
+def _infer_sort_inner(term: Term, engine: "Engine", memo: Dict[Term, Optional[str]]) -> Optional[str]:
+    cached = memo.get(term)
+    if term in memo:
+        return cached
+
+    match term:
+        case Var(_, sort):
+            memo[term] = sort
+            return sort
+
+        case Fun(symbol, args):
+            arg_sorts = tuple(_infer_sort_inner(a, engine, memo) for a in args)
+            sig = engine.sort_signatures.get(symbol)
+            if sig is None:
+                memo[term] = None
+                return None
+
+            if len(sig.arg_sorts) != len(args):
+                raise ValueError(
+                    f"Ill-sorted term: {symbol} expects {len(sig.arg_sorts)} args, got {len(args)}."
+                )
+
+            for i, (expected, actual) in enumerate(zip(sig.arg_sorts, arg_sorts)):
+                _validate_declared_arg_sort(expected, actual, symbol, i)
+
+            if symbol in {"eq", "neq"} and len(arg_sorts) == 2:
+                l_sort, r_sort = arg_sorts
+                if l_sort is not None and r_sort is not None and l_sort != r_sort:
+                    raise ValueError(
+                        f"Ill-sorted term: {symbol} arguments have incompatible sorts {l_sort} and {r_sort}."
+                    )
+
+            if symbol == "if" and len(arg_sorts) == 3:
+                cond_sort, then_sort, else_sort = arg_sorts
+                if cond_sort is not None and cond_sort != "Bool":
+                    raise ValueError(f"Ill-sorted term: if condition must be Bool, got {cond_sort}.")
+                if then_sort is not None and else_sort is not None and then_sort != else_sort:
+                    raise ValueError(
+                        f"Ill-sorted term: if branches have incompatible sorts {then_sort} and {else_sort}."
+                    )
+                out = then_sort if then_sort is not None else else_sort
+                memo[term] = out
+                return out
+
+            memo[term] = sig.result_sort
+            return sig.result_sort
+
+
+def infer_sort(term: Term, engine: "Engine") -> Optional[str]:
+    return _infer_sort_inner(term, engine, {})
+
+
+def _validate_equality_pair(lhs: Term, rhs: Term, engine: "Engine", where: str):
+    l_sort = infer_sort(lhs, engine)
+    r_sort = infer_sort(rhs, engine)
+    if l_sort is not None and r_sort is not None and l_sort != r_sort:
+        raise ValueError(f"Ill-sorted {where}: equality sides have sorts {l_sort} and {r_sort}.")
+
+
+def _validate_rule_sorts(rule: Rule, engine: "Engine", where: str):
+    _validate_equality_pair(rule.lhs, rule.rhs, engine, where)
+    for i, (l, r) in enumerate(rule.conditions):
+        _validate_equality_pair(l, r, engine, f"{where} condition[{i}]")
+
+
+def _validate_clause_sorts(clause: "Clause", engine: "Engine", where: str):
+    infer_sort(clause.goal, engine)
+    for i, (l, r) in enumerate(clause.assumptions):
+        _validate_equality_pair(l, r, engine, f"{where} assumption[{i}]")
+
+
 # -----------------------------------------------------------------------------
 # Trace
 # -----------------------------------------------------------------------------
@@ -576,6 +688,7 @@ class Engine:
     config: Optional[EngineConfig] = None
     ground_cache: Optional[Dict[Term, Term]] = None
     schemes: Optional[Dict[str, "InductionScheme"]] = None
+    sort_signatures: Optional[Dict[str, SortSignature]] = None
     theory: Optional["TheoremEnvironment"] = None
 
     def __post_init__(self):
@@ -588,6 +701,12 @@ class Engine:
             self.ground_cache = {}
         if self.schemes is None:
             self.schemes = {}
+        if self.sort_signatures is None:
+            self.sort_signatures = default_sort_signatures()
+        else:
+            self.sort_signatures = dict(self.sort_signatures)
+        for i, rule in enumerate(self.rules):
+            _validate_rule_sorts(rule, self, f"rule[{i}]")
 
     def _ensure_eq_classes(self, term: Optional[Term] = None):
         if self.eq_classes is None:
@@ -689,6 +808,35 @@ class Engine:
         return term
 
     def register_scheme(self, scheme: "InductionScheme"):
+        for i, base in enumerate(scheme.base_terms):
+            base_sort = infer_sort(base, self)
+            if base_sort is not None and base_sort != scheme.sort:
+                raise ValueError(
+                    f"Induction scheme {scheme.name} base[{i}] has sort {base_sort}, expected {scheme.sort}."
+                )
+        for cons in scheme.constructors:
+            sig = self.sort_signatures.get(cons.symbol)
+            if sig is None:
+                continue
+            if len(sig.arg_sorts) != cons.arity:
+                raise ValueError(
+                    f"Induction constructor {cons.symbol} arity {cons.arity} mismatches declared arity {len(sig.arg_sorts)}."
+                )
+            if sig.result_sort is not None and sig.result_sort != scheme.sort:
+                raise ValueError(
+                    f"Induction constructor {cons.symbol} returns {sig.result_sort}, expected {scheme.sort}."
+                )
+            for pos in cons.recursive_positions:
+                if pos < 0 or pos >= len(sig.arg_sorts):
+                    raise ValueError(
+                        f"Induction constructor {cons.symbol} recursive arg index {pos} out of range."
+                    )
+                expected = sig.arg_sorts[pos]
+                if expected is not None and expected != scheme.sort:
+                    raise ValueError(
+                        f"Induction constructor {cons.symbol} recursive arg {pos} sort {expected} "
+                        f"does not match scheme sort {scheme.sort}."
+                    )
         self.schemes[scheme.name] = scheme
 
     def get_scheme(self, name: str) -> Optional["InductionScheme"]:
@@ -701,12 +849,20 @@ class Engine:
         return None
 
     def reset_rules(self, rules: list[Rule]):
+        for i, rule in enumerate(rules):
+            _validate_rule_sorts(rule, self, f"rule[{i}]")
         self.rules = list(rules)
         self.index = RuleIndex(self.rules)
         self.memo = {}
         self.eq_classes = None
         if self.ground_cache is not None:
             self.ground_cache.clear()
+
+    def register_sort_signature(self, symbol: str, signature: SortSignature):
+        self.sort_signatures[symbol] = signature
+
+    def get_sort_signature(self, symbol: str) -> Optional[SortSignature]:
+        return self.sort_signatures.get(symbol)
 
     def get_theory(self) -> "TheoremEnvironment":
         if self.theory is None:
@@ -722,6 +878,7 @@ def make_engine(
     config: Optional[EngineConfig] = None,
     ground_cache: Optional[Dict[Term, Term]] = None,
     schemes: Optional[Dict[str, "InductionScheme"]] = None,
+    sort_signatures: Optional[Dict[str, SortSignature]] = None,
 ) -> Engine:
     return Engine(
         rules=rules,
@@ -731,6 +888,7 @@ def make_engine(
         config=config,
         ground_cache=ground_cache,
         schemes=schemes,
+        sort_signatures=sort_signatures,
     )
 
 
@@ -797,6 +955,14 @@ def get_induction_scheme_for_sort(engine: Engine, sort: str) -> Optional[Inducti
 
 def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
     return engine.get_theory()
+
+
+def register_sort_signature(engine: Engine, symbol: str, signature: SortSignature):
+    engine.register_sort_signature(symbol, signature)
+
+
+def get_sort_signature(engine: Engine, symbol: str) -> Optional[SortSignature]:
+    return engine.get_sort_signature(symbol)
 
 
 def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
@@ -883,6 +1049,7 @@ def simplify_clause(clause: Clause, engine: Engine):
 
 def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause, list[tuple[str, Clause]]]:
     stages: list[tuple[str, Clause]] = []
+    _validate_clause_sorts(clause, engine, "clause")
 
     # Stage 1: normalize and deduplicate assumptions using rewrite rules only.
     assumptions = _simplify_assumptions(clause.assumptions, engine)
@@ -903,6 +1070,7 @@ def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause,
         config=engine.config,
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
+        sort_signatures=engine.sort_signatures,
     )
     contextual_goal = normalize(base_goal, local_engine)
     stage_clause = Clause(assumptions, contextual_goal)
@@ -926,6 +1094,7 @@ def _normalize_with_rules_only(term: Term, engine: Engine) -> Term:
         config=engine.config,
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
+        sort_signatures=engine.sort_signatures,
     )
     return normalize(term, base_engine)
 
@@ -1142,6 +1311,7 @@ def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
         config=engine.config,
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
+        sort_signatures=engine.sort_signatures,
     )
 
 
@@ -1153,10 +1323,12 @@ def _check_split_step(clause: Clause) -> list[Clause]:
     return split_clause(clause)
 
 
-def _check_induction_step(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+def _check_induction_step(clause: Clause, var: Var, scheme: InductionScheme, engine: Engine) -> list[Clause]:
     branches = induction_branches(clause, var, scheme)
     if not branches:
         raise ValueError("Induction does not apply to this goal/scheme.")
+    for i, branch in enumerate(branches):
+        _validate_clause_sorts(branch, engine, f"induction branch[{i}]")
     return branches
 
 
@@ -1176,11 +1348,14 @@ def _check_exact_step(clause: Clause, engine: Engine) -> Clause:
 
 
 def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
+    _validate_rule_sorts(rule, engine, "rewrite step")
     local = _local_engine_for_clause(clause, engine)
     rewritten = local.rewrite_once(clause.goal, rule)
     if rewritten is None:
         raise ValueError("Rewrite rule does not apply to current goal.")
-    return Clause(clause.assumptions, rewritten)
+    out = Clause(clause.assumptions, rewritten)
+    _validate_clause_sorts(out, engine, "rewrite result")
+    return out
 
 
 def _prove_certificate_kernel(
@@ -1417,6 +1592,7 @@ class TheoremEnvironment:
             raise ValueError("Only assumption-free lemmas can be registered in this minimal environment.")
         if goal_equality(lemma.clause.goal) is None:
             raise ValueError("Lemma goal must be an equality.")
+        _validate_clause_sorts(lemma.clause, self.engine, f"lemma {lemma.name}")
         if lemma.certificate.clause != lemma.clause:
             raise ValueError("Lemma certificate root does not match lemma clause.")
         if not check_certificate(lemma.certificate, self.engine, depth=depth, induction_depth=induction_depth):
@@ -1435,6 +1611,7 @@ class TheoremEnvironment:
             case _:
                 raise ValueError("Definition lhs must be a function application.")
         rule = Rule(lhs, rhs)
+        _validate_rule_sorts(rule, self.engine, f"definition {name}")
         self.definitions[name] = rule
         self._add_rule_to_scope(scope, rule)
 
@@ -1453,6 +1630,7 @@ class TheoremEnvironment:
         lhs, rhs = eq_goal
         assert self.engine.config is not None
         rule = _orient_equality_as_rewrite(self.engine.config, lhs, rhs, orientation)
+        _validate_rule_sorts(rule, self.engine, f"lemma rewrite {lemma_name}")
 
         self.lemma_rewrites[lemma_name] = rule
         self._add_rule_to_scope(scope, rule)
@@ -1530,7 +1708,7 @@ class ProofSession:
             raise ValueError("No goals left.")
         original = self.goals[0]
         chosen = _select_induction_scheme(self.engine, var, scheme=scheme, scheme_name=scheme_name)
-        branches = _check_induction_step(original, var, chosen)
+        branches = _check_induction_step(original, var, chosen, self.engine)
         kids = [_new_node("induction-branch", b, note=f"index={i}") for i, b in enumerate(branches)]
         self._record("session-induct", original, note=f"var={var.name}, scheme={chosen.name}", children=kids)
         self._replace_current(branches)
@@ -1563,7 +1741,7 @@ class ProofSession:
             plan.append((var.name, chosen.name))
             next_pending: list[Clause] = []
             for clause in pending:
-                next_pending.extend(_check_induction_step(clause, var, chosen))
+                next_pending.extend(_check_induction_step(clause, var, chosen, self.engine))
             pending = next_pending
 
         kids = [_new_node("induction-branch", b, note=f"index={i}") for i, b in enumerate(pending)]
@@ -2012,6 +2190,42 @@ if __name__ == "__main__":
     assert "stage-assumptions" in sess_stages_rendered
     assert "stage-rule-goal" in sess_stages_rendered
     assert "stage-context-goal" in sess_stages_rendered
+
+    # Test 46: sort signature registry supports registration and inference
+    is_zero_sig = SortSignature(("Nat",), "Bool")
+    register_sort_signature(engine, "is_zero", is_zero_sig)
+    assert get_sort_signature(engine, "is_zero") == is_zero_sig
+    assert infer_sort(App("is_zero", zero), engine) == "Bool"
+
+    # Test 47: declared symbols are checked, undeclared symbols remain permissive
+    try:
+        infer_sort(add(nil, zero), engine)
+        assert False
+    except ValueError:
+        pass
+    assert infer_sort(App("mystery", nil), engine) is None
+
+    # Test 48: ill-sorted rules are rejected at engine construction
+    try:
+        make_engine(rules=builtin_rules() + [Rule(add(nil, zero), zero)], config=shared_config, ground_cache={}, schemes={})
+        assert False
+    except ValueError:
+        pass
+
+    # Test 49: theorem definitions reject declared sort mismatches
+    try:
+        scoped_theory.register_definition("bad_len", App("length", zero), zero, scope="def_scope")
+        assert False
+    except ValueError:
+        pass
+
+    # Test 50: ill-sorted clauses fail early in simplification/proof flow
+    bad_clause_sort = Clause((), eq(add(nil, zero), zero))
+    try:
+        simplify_clause(bad_clause_sort, engine)
+        assert False
+    except ValueError:
+        pass
 
     print("\nAppend associativity proof trace:")
     print(rendered)

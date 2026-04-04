@@ -25,10 +25,11 @@ Public API (small, stable surface):
 - checked proving entry points: prove_checked, check_certificate
 - typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
-- theory + theorem environment/session: Theory, load_theory_module, get_theorem_environment, TheoremEnvironment, ProofSession
+- theory + theorem environment/session: Theory, load_theory_module, install_theory, get_theorem_environment, TheoremEnvironment, ProofSession
 """
 
-from dataclasses import dataclass
+import importlib
+from dataclasses import dataclass, field
 from typing import Tuple, Dict, Optional
 from weakref import WeakValueDictionary
 
@@ -81,6 +82,7 @@ __all__ = [
     "Theory",
     "theory_from_module",
     "load_theory_module",
+    "install_theory",
     "TheoremEnvironment",
     "get_theorem_environment",
     "ProofSession",
@@ -1107,6 +1109,39 @@ def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
     return engine.get_theory()
 
 
+def install_theory(engine: Engine, theory: "Theory", activate_scopes: bool = True) -> Tuple[str, ...]:
+    env = get_theorem_environment(engine)
+    install_scope = f"theory:{theory.name}"
+    for symbol in sorted(theory.sort_signatures):
+        register_sort_signature(engine, symbol, theory.sort_signatures[symbol])
+
+    for scheme in sorted(theory.schemes, key=lambda s: s.name):
+        register_induction_scheme(engine, scheme)
+
+    for name in sorted(theory.definitions):
+        definition = theory.definitions[name]
+        env.register_definition(name, definition.lhs, definition.rhs, scope=install_scope)
+
+    for i, rule in enumerate(theory.rules):
+        env.register_rule(rule, scope=install_scope, label=f"{theory.name}.rule[{i}]")
+
+    for lemma in sorted(theory.lemmas, key=lambda l: l.name):
+        env.register_lemma(lemma)
+
+    seen: set[str] = set()
+    activated_list: list[str] = []
+    for scope in (install_scope, *theory.default_scopes):
+        env.create_scope(scope)
+        if scope not in seen:
+            seen.add(scope)
+            activated_list.append(scope)
+    activated = tuple(activated_list)
+    if activate_scopes:
+        for scope in activated:
+            env.activate_scope(scope)
+    return activated
+
+
 def register_sort_signature(engine: Engine, symbol: str, signature: SortSignature):
     engine.register_sort_signature(symbol, signature)
 
@@ -1656,9 +1691,9 @@ class Theory:
     name: str
     version: str = "0.0.1"
     depends_on: Tuple[str, ...] = ()
-    sort_signatures: Dict[str, SortSignature] = None
+    sort_signatures: Dict[str, SortSignature] = field(default_factory=dict)
     rules: Tuple[Rule, ...] = ()
-    definitions: Dict[str, Rule] = None
+    definitions: Dict[str, Rule] = field(default_factory=dict)
     lemmas: Tuple[Lemma, ...] = ()
     schemes: Tuple[InductionScheme, ...] = ()
     default_scopes: Tuple[str, ...] = ()
@@ -1681,8 +1716,6 @@ def theory_from_module(module) -> Theory:
 
 
 def load_theory_module(module_name: str) -> Theory:
-    import importlib
-
     return theory_from_module(importlib.import_module(module_name))
 
 
@@ -1784,11 +1817,15 @@ class TheoremEnvironment:
             raise ValueError("Lemma certificate failed validation.")
         self.lemmas[lemma.name] = lemma
 
+    def register_rule(self, rule: Rule, scope: str = "theories", label: str = "theory rule"):
+        _validate_rule_sorts(rule, self.engine, label)
+        self._add_rule_to_scope(scope, rule)
+
     def register_definition(self, name: str, lhs: Term, rhs: Term, scope: str = "definitions"):
         match lhs:
             case Fun(sym, _):
                 if _contains_symbol(rhs, sym):
-                    raise ValueError("Recursive definitions are not supported in this phase.")
+                    raise ValueError("Recursive definitions are not supported in this prover core.")
                 assert self.engine.config is not None
                 if sym not in self.engine.config.precedence:
                     base = max(self.engine.config.precedence.values(), default=0)
@@ -2487,6 +2524,26 @@ if __name__ == "__main__":
     assert theory_from_module(_ToyModule) is toy_theory
     try:
         theory_from_module(object())
+        assert False
+    except ValueError:
+        pass
+
+    # Test 53: install_theory is engine-scoped and respects activation flag
+    install_rules = builtin_rules() + [r1, r2]
+    install_engine_a = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    install_engine_b = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    install_theory_payload = Theory(
+        name="toy.install",
+        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        rules=(Rule(App("double", x), add(x, x)),),
+    )
+    activated_scopes = install_theory(install_engine_a, install_theory_payload, activate_scopes=False)
+    assert activated_scopes == ("theory:toy.install",)
+    assert str(normalize(App("double", S(zero)), install_engine_a)) == "double(S(0))"
+    get_theorem_environment(install_engine_a).activate_scope("theory:toy.install")
+    assert str(normalize(App("double", S(zero)), install_engine_a)) == "S(S(0))"
+    try:
+        infer_sort(App("double", S(zero)), install_engine_b)
         assert False
     except ValueError:
         pass

@@ -17,11 +17,13 @@ Boyer–Moore style rewriting core with:
 - induction schemes
 - checked proof certificates
 - interactive theorem environment/session
+- strict inference-first term typing
 
 Public API (small, stable surface):
 - term constructors: V, Const, App
 - proving entry points: normalize, prove, prove_with_induction, prove_with_registered_induction
 - checked proving entry points: prove_checked, check_certificate
+- typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
 - theorem environment/session: get_theorem_environment, TheoremEnvironment, ProofSession
 """
@@ -32,6 +34,9 @@ from weakref import WeakValueDictionary
 
 __all__ = [
     "Term",
+    "TypeTerm",
+    "TypeVar",
+    "TypeConst",
     "Var",
     "Fun",
     "V",
@@ -58,6 +63,7 @@ __all__ = [
     "builtin_rules",
     "register_sort_signature",
     "get_sort_signature",
+    "infer_type",
     "infer_sort",
     "normalize",
     "prove",
@@ -83,6 +89,37 @@ __all__ = [
 
 class Term:
     pass
+
+
+class TypeTerm:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class TypeVar(TypeTerm):
+    name: str
+
+    def __str__(self):
+        return self.name
+
+
+@dataclass(frozen=True, slots=True)
+class TypeConst(TypeTerm):
+    name: str
+    args: Tuple[TypeTerm, ...] = ()
+
+    def __str__(self):
+        if not self.args:
+            return self.name
+        return f"{self.name}[{', '.join(map(str, self.args))}]"
+
+
+def _to_type_term(v) -> TypeTerm:
+    if isinstance(v, TypeTerm):
+        return v
+    if isinstance(v, str):
+        return TypeConst(v)
+    raise ValueError(f"Unsupported type term: {v!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,25 +368,30 @@ def default_engine_config() -> EngineConfig:
 
 @dataclass(frozen=True)
 class SortSignature:
-    arg_sorts: Tuple[Optional[str], ...]
-    result_sort: Optional[str]
+    arg_sorts: Tuple[TypeTerm, ...]
+    result_sort: TypeTerm
+
+    def __post_init__(self):
+        object.__setattr__(self, "arg_sorts", tuple(_to_type_term(a) for a in self.arg_sorts))
+        object.__setattr__(self, "result_sort", _to_type_term(self.result_sort))
 
 
 def default_sort_signatures() -> Dict[str, SortSignature]:
+    A = TypeVar("A")
     return {
-        "0": SortSignature((), "Nat"),
-        "1": SortSignature((), "Nat"),
-        "true": SortSignature((), "Bool"),
-        "false": SortSignature((), "Bool"),
-        "S": SortSignature(("Nat",), "Nat"),
-        "add": SortSignature(("Nat", "Nat"), "Nat"),
-        "nil": SortSignature((), "List"),
-        "cons": SortSignature((None, "List"), "List"),
-        "append": SortSignature(("List", "List"), "List"),
-        "length": SortSignature(("List",), "Nat"),
-        "eq": SortSignature((None, None), "Bool"),
-        "neq": SortSignature((None, None), "Bool"),
-        "if": SortSignature(("Bool", None, None), None),
+        "0": SortSignature((), TypeConst("Nat")),
+        "1": SortSignature((), TypeConst("Nat")),
+        "true": SortSignature((), TypeConst("Bool")),
+        "false": SortSignature((), TypeConst("Bool")),
+        "S": SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
+        "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+        "nil": SortSignature((), TypeConst("List", (A,))),
+        "cons": SortSignature((A, TypeConst("List", (A,))), TypeConst("List", (A,))),
+        "append": SortSignature((TypeConst("List", (A,)), TypeConst("List", (A,))), TypeConst("List", (A,))),
+        "length": SortSignature((TypeConst("List", (A,)),), TypeConst("Nat")),
+        "eq": SortSignature((A, A), TypeConst("Bool")),
+        "neq": SortSignature((A, A), TypeConst("Bool")),
+        "if": SortSignature((TypeConst("Bool"), A, A), A),
     }
 
 
@@ -527,75 +569,164 @@ def is_ground(t: Term) -> bool:
             return all(is_ground(a) for a in args)
 
 
-def _validate_declared_arg_sort(
-    expected: Optional[str],
-    actual: Optional[str],
-    symbol: str,
-    index: int,
-):
-    if expected is not None and actual is not None and expected != actual:
-        raise ValueError(
-            f"Ill-sorted term: {symbol} argument {index} expects {expected}, got {actual}."
-        )
+def _apply_type_subst(t: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> TypeTerm:
+    match t:
+        case TypeVar() as tv:
+            if tv in subst:
+                out = _apply_type_subst(subst[tv], subst)
+                subst[tv] = out
+                return out
+            return tv
+        case TypeConst(name, args):
+            if not args:
+                return t
+            return TypeConst(name, tuple(_apply_type_subst(a, subst) for a in args))
 
 
-def _infer_sort_inner(term: Term, engine: "Engine", memo: Dict[Term, Optional[str]]) -> Optional[str]:
-    cached = memo.get(term)
-    if term in memo:
-        return cached
+def _occurs_in_type(tv: TypeVar, t: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> bool:
+    t = _apply_type_subst(t, subst)
+    match t:
+        case TypeVar() as other:
+            return other == tv
+        case TypeConst(_, args):
+            return any(_occurs_in_type(tv, a, subst) for a in args)
 
+
+def _unify_types(left: TypeTerm, right: TypeTerm, subst: Dict[TypeVar, TypeTerm], where: str):
+    l = _apply_type_subst(left, subst)
+    r = _apply_type_subst(right, subst)
+    if l == r:
+        return
+    match l, r:
+        case TypeVar() as lv, _:
+            if _occurs_in_type(lv, r, subst):
+                raise ValueError(f"Ill-typed {where}: recursive type in {lv} ~ {r}.")
+            subst[lv] = r
+            return
+        case _, TypeVar() as rv:
+            if _occurs_in_type(rv, l, subst):
+                raise ValueError(f"Ill-typed {where}: recursive type in {l} ~ {rv}.")
+            subst[rv] = l
+            return
+        case TypeConst(ln, la), TypeConst(rn, ra):
+            if ln != rn or len(la) != len(ra):
+                raise ValueError(f"Ill-typed {where}: cannot unify {l} with {r}.")
+            for i, (a, b) in enumerate(zip(la, ra)):
+                _unify_types(a, b, subst, f"{where} arg[{i}]")
+            return
+    raise ValueError(f"Ill-typed {where}: cannot unify {l} with {r}.")
+
+
+def _fresh_type_var(prefix: str, counter: list[int]) -> TypeVar:
+    n = counter[0]
+    counter[0] = n + 1
+    return TypeVar(f"{prefix}_{n}")
+
+
+_ANNOTATED_PARAM_SORT_ARITY: Dict[str, int] = {
+    "List": 1,
+}
+
+
+def _type_from_sort_annotation(sort: str, counter: list[int]) -> TypeTerm:
+    arity = _ANNOTATED_PARAM_SORT_ARITY.get(sort)
+    if arity is not None:
+        return TypeConst(sort, tuple(_fresh_type_var("s", counter) for _ in range(arity)))
+    return TypeConst(sort)
+
+
+def _matches_sort_name(t: TypeTerm, sort_name: str) -> bool:
+    match t:
+        case TypeConst(name, _):
+            return name == sort_name
+        case _:
+            return False
+
+
+def _freshen_signature(sig: SortSignature, counter: list[int]) -> tuple[Tuple[TypeTerm, ...], TypeTerm]:
+    mapping: Dict[TypeVar, TypeVar] = {}
+
+    def freshen(t: TypeTerm) -> TypeTerm:
+        match t:
+            case TypeVar() as tv:
+                out = mapping.get(tv)
+                if out is None:
+                    out = _fresh_type_var("t", counter)
+                    mapping[tv] = out
+                return out
+            case TypeConst(name, args):
+                return TypeConst(name, tuple(freshen(a) for a in args))
+
+    return tuple(freshen(a) for a in sig.arg_sorts), freshen(sig.result_sort)
+
+
+def _infer_type_inner(
+    term: Term,
+    engine: "Engine",
+    var_env: Dict[Var, TypeTerm],
+    subst: Dict[TypeVar, TypeTerm],
+    counter: list[int],
+) -> TypeTerm:
     match term:
-        case Var(_, sort):
-            memo[term] = sort
-            return sort
+        case Var(_, sort) as v:
+            existing = var_env.get(v)
+            if existing is not None:
+                return _apply_type_subst(existing, subst)
+            if sort is not None:
+                t = _type_from_sort_annotation(sort, counter)
+            else:
+                t = _fresh_type_var("v", counter)
+            var_env[v] = t
+            return _apply_type_subst(t, subst)
 
         case Fun(symbol, args):
-            arg_sorts = tuple(_infer_sort_inner(a, engine, memo) for a in args)
             sig = engine.sort_signatures.get(symbol)
             if sig is None:
-                memo[term] = None
-                return None
-
-            if len(sig.arg_sorts) != len(args):
+                raise ValueError(f"Unknown symbol type: {symbol}. Register a sort signature first.")
+            exp_args, exp_res = _freshen_signature(sig, counter)
+            if len(exp_args) != len(args):
                 raise ValueError(
-                    f"Ill-sorted term: {symbol} expects {len(sig.arg_sorts)} args, got {len(args)}."
+                    f"Ill-typed term: {symbol} expects {len(exp_args)} args, got {len(args)}."
                 )
-
-            for i, (expected, actual) in enumerate(zip(sig.arg_sorts, arg_sorts)):
-                _validate_declared_arg_sort(expected, actual, symbol, i)
-
-            if symbol in {"eq", "neq"} and len(arg_sorts) == 2:
-                l_sort, r_sort = arg_sorts
-                if l_sort is not None and r_sort is not None and l_sort != r_sort:
-                    raise ValueError(
-                        f"Ill-sorted term: {symbol} arguments have incompatible sorts {l_sort} and {r_sort}."
-                    )
-
-            if symbol == "if" and len(arg_sorts) == 3:
-                cond_sort, then_sort, else_sort = arg_sorts
-                if cond_sort is not None and cond_sort != "Bool":
-                    raise ValueError(f"Ill-sorted term: if condition must be Bool, got {cond_sort}.")
-                if then_sort is not None and else_sort is not None and then_sort != else_sort:
-                    raise ValueError(
-                        f"Ill-sorted term: if branches have incompatible sorts {then_sort} and {else_sort}."
-                    )
-                out = then_sort if then_sort is not None else else_sort
-                memo[term] = out
-                return out
-
-            memo[term] = sig.result_sort
-            return sig.result_sort
+            for i, (arg, expected_t) in enumerate(zip(args, exp_args)):
+                actual_t = _infer_type_inner(arg, engine, var_env, subst, counter)
+                _unify_types(actual_t, expected_t, subst, f"{symbol} argument {i}")
+            return _apply_type_subst(exp_res, subst)
 
 
-def infer_sort(term: Term, engine: "Engine") -> Optional[str]:
-    return _infer_sort_inner(term, engine, {})
+def infer_type(term: Term, engine: "Engine") -> TypeTerm:
+    subst: Dict[TypeVar, TypeTerm] = {}
+    t = _infer_type_inner(term, engine, {}, subst, [0])
+    t = _apply_type_subst(t, subst)
+    return t
+
+
+def _contains_type_vars(t: TypeTerm) -> bool:
+    match t:
+        case TypeVar():
+            return True
+        case TypeConst(_, args):
+            return any(_contains_type_vars(a) for a in args)
+
+
+def infer_sort(term: Term, engine: "Engine") -> str:
+    t = infer_type(term, engine)
+    if _contains_type_vars(t):
+        raise ValueError(f"Ambiguous inferred type for term {term}: {t}.")
+    match t:
+        case TypeConst(name, ()) as c:
+            return c.name
+        case _:
+            return str(t)
 
 
 def _validate_equality_pair(lhs: Term, rhs: Term, engine: "Engine", where: str):
-    l_sort = infer_sort(lhs, engine)
-    r_sort = infer_sort(rhs, engine)
-    if l_sort is not None and r_sort is not None and l_sort != r_sort:
-        raise ValueError(f"Ill-sorted {where}: equality sides have sorts {l_sort} and {r_sort}.")
+    subst: Dict[TypeVar, TypeTerm] = {}
+    counter = [0]
+    env: Dict[Var, TypeTerm] = {}
+    l_t = _infer_type_inner(lhs, engine, env, subst, counter)
+    r_t = _infer_type_inner(rhs, engine, env, subst, counter)
+    _unify_types(l_t, r_t, subst, where)
 
 
 def _validate_rule_sorts(rule: Rule, engine: "Engine", where: str):
@@ -605,7 +736,7 @@ def _validate_rule_sorts(rule: Rule, engine: "Engine", where: str):
 
 
 def _validate_clause_sorts(clause: "Clause", engine: "Engine", where: str):
-    infer_sort(clause.goal, engine)
+    infer_type(clause.goal, engine)
     for i, (l, r) in enumerate(clause.assumptions):
         _validate_equality_pair(l, r, engine, f"{where} assumption[{i}]")
 
@@ -809,11 +940,17 @@ class Engine:
 
     def register_scheme(self, scheme: "InductionScheme"):
         for i, base in enumerate(scheme.base_terms):
-            base_sort = infer_sort(base, self)
-            if base_sort is not None and base_sort != scheme.sort:
-                raise ValueError(
-                    f"Induction scheme {scheme.name} base[{i}] has sort {base_sort}, expected {scheme.sort}."
-                )
+            base_type = infer_type(base, self)
+            match base_type:
+                case TypeConst(name, _):
+                    if name != scheme.sort:
+                        raise ValueError(
+                            f"Induction scheme {scheme.name} base[{i}] has type {base_type}, expected {scheme.sort}."
+                        )
+                case _:
+                    raise ValueError(
+                        f"Induction scheme {scheme.name} base[{i}] has non-constructor type {base_type}."
+                    )
         for cons in scheme.constructors:
             sig = self.sort_signatures.get(cons.symbol)
             if sig is None:
@@ -822,7 +959,7 @@ class Engine:
                 raise ValueError(
                     f"Induction constructor {cons.symbol} arity {cons.arity} mismatches declared arity {len(sig.arg_sorts)}."
                 )
-            if sig.result_sort is not None and sig.result_sort != scheme.sort:
+            if not _matches_sort_name(sig.result_sort, scheme.sort):
                 raise ValueError(
                     f"Induction constructor {cons.symbol} returns {sig.result_sort}, expected {scheme.sort}."
                 )
@@ -832,7 +969,7 @@ class Engine:
                         f"Induction constructor {cons.symbol} recursive arg index {pos} out of range."
                     )
                 expected = sig.arg_sorts[pos]
-                if expected is not None and expected != scheme.sort:
+                if not _matches_sort_name(expected, scheme.sort):
                     raise ValueError(
                         f"Induction constructor {cons.symbol} recursive arg {pos} sort {expected} "
                         f"does not match scheme sort {scheme.sort}."
@@ -1846,8 +1983,16 @@ if __name__ == "__main__":
     rules = builtin_rules() + [r1, r2, r3, r4, r5, r6, r7, r8, r9]
     shared_cache: Dict[Term, Term] = {}
     shared_schemes: Dict[str, InductionScheme] = {}
+    shared_sort_signatures = default_sort_signatures()
+    shared_sort_signatures["f"] = SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
     shared_config = default_engine_config()
-    engine = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    engine = make_engine(
+        rules=rules,
+        config=shared_config,
+        ground_cache=shared_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
 
     # Test 1
     t = add(S(S(zero)), S(zero))
@@ -1870,7 +2015,14 @@ if __name__ == "__main__":
 
     # Test 6
     tr = Trace()
-    tr_engine = make_engine(rules=rules, trace=tr, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    tr_engine = make_engine(
+        rules=rules,
+        trace=tr,
+        config=shared_config,
+        ground_cache=shared_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
     normalize(add(S(zero), zero), tr_engine)
     assert len(tr.steps) > 0
 
@@ -1970,8 +2122,20 @@ if __name__ == "__main__":
 
     # Test 24: shared cache can be reused across engines
     term_shared = add(zero, zero)
-    a = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
-    b = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    a = make_engine(
+        rules=rules,
+        config=shared_config,
+        ground_cache=shared_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
+    b = make_engine(
+        rules=rules,
+        config=shared_config,
+        ground_cache=shared_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
     normalize(term_shared, a)
     assert term_shared in shared_cache
     assert normalize(term_shared, b) is shared_cache[term_shared]
@@ -1979,15 +2143,33 @@ if __name__ == "__main__":
     # Test 25: isolated caches are independent
     iso_a_cache: Dict[Term, Term] = {}
     iso_b_cache: Dict[Term, Term] = {}
-    iso_a = make_engine(rules=rules, config=shared_config, ground_cache=iso_a_cache, schemes=shared_schemes)
-    iso_b = make_engine(rules=rules, config=shared_config, ground_cache=iso_b_cache, schemes=shared_schemes)
+    iso_a = make_engine(
+        rules=rules,
+        config=shared_config,
+        ground_cache=iso_a_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
+    iso_b = make_engine(
+        rules=rules,
+        config=shared_config,
+        ground_cache=iso_b_cache,
+        schemes=shared_schemes,
+        sort_signatures=shared_sort_signatures,
+    )
     normalize(term_shared, iso_a)
     assert term_shared in iso_a_cache
     assert term_shared not in iso_b_cache
 
     # Test 26: per-engine config isolation (AC metadata)
     no_ac_config = EngineConfig(precedence=shared_config.precedence, assoc=set(), comm=set())
-    no_ac_engine = make_engine(rules=rules, config=no_ac_config, ground_cache={}, schemes={})
+    no_ac_engine = make_engine(
+        rules=rules,
+        config=no_ac_config,
+        ground_cache={},
+        schemes={},
+        sort_signatures=shared_sort_signatures,
+    )
     assert str(normalize(add(y, add(x, z)), no_ac_engine)) == "add(y, add(x, z))"
     assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
 
@@ -2103,6 +2285,7 @@ if __name__ == "__main__":
     assert str(normalize(app(xs, nil), scoped_engine)) == "append(xs, nil)"
 
     # Test 37: theorem environment supports non-recursive definitions in scopes
+    register_sort_signature(scoped_engine, "double", SortSignature(("Nat",), "Nat"))
     scoped_theory.register_definition("double", App("double", x), add(x, x), scope="def_scope")
     scoped_theory.activate_scope("def_scope")
     assert str(normalize(App("double", S(zero)), scoped_engine)) == "S(S(0))"
@@ -2197,13 +2380,17 @@ if __name__ == "__main__":
     assert get_sort_signature(engine, "is_zero") == is_zero_sig
     assert infer_sort(App("is_zero", zero), engine) == "Bool"
 
-    # Test 47: declared symbols are checked, undeclared symbols remain permissive
+    # Test 47: declared symbols are checked, undeclared symbols are rejected
     try:
         infer_sort(add(nil, zero), engine)
         assert False
     except ValueError:
         pass
-    assert infer_sort(App("mystery", nil), engine) is None
+    try:
+        infer_sort(App("mystery", nil), engine)
+        assert False
+    except ValueError:
+        pass
 
     # Test 48: ill-sorted rules are rejected at engine construction
     try:
@@ -2223,6 +2410,13 @@ if __name__ == "__main__":
     bad_clause_sort = Clause((), eq(add(nil, zero), zero))
     try:
         simplify_clause(bad_clause_sort, engine)
+        assert False
+    except ValueError:
+        pass
+
+    # Test 51: ambiguous standalone type inference is rejected by infer_sort
+    try:
+        infer_sort(x, engine)
         assert False
     except ValueError:
         pass

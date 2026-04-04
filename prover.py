@@ -15,11 +15,49 @@ Boyer–Moore style rewriting core with:
 - negation and split
 - congruence closure
 - induction schemes
+
+Public API (small, stable surface):
+- term constructors: V, Const, App
+- proving entry points: normalize, prove, prove_with_induction, prove_with_registered_induction
+- induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
 """
 
 from dataclasses import dataclass
 from typing import Tuple, Dict, Optional
 from weakref import WeakValueDictionary
+
+__all__ = [
+    "Term",
+    "Var",
+    "Fun",
+    "V",
+    "reset_var_interner",
+    "Const",
+    "App",
+    "true",
+    "false",
+    "Rule",
+    "Clause",
+    "Context",
+    "InductionConstructor",
+    "InductionScheme",
+    "nat_induction_scheme",
+    "list_induction_scheme",
+    "register_induction_scheme",
+    "get_induction_scheme",
+    "get_induction_scheme_for_sort",
+    "make_engine",
+    "EngineConfig",
+    "default_engine_config",
+    "normalize",
+    "prove",
+    "prove_with_induction",
+    "prove_with_registered_induction",
+    "ProofTrace",
+    "ProofNode",
+    "render_proof_trace",
+    "prove_with_trace",
+]
 
 # -----------------------------------------------------------------------------
 # Terms (hash-consed)
@@ -36,6 +74,34 @@ class Var(Term):
 
     def __str__(self):
         return self.name
+
+
+_VAR_INTERN: Dict[Tuple[str, Optional[str]], Var] = {}
+_VAR_NAME_SORT: Dict[str, Optional[str]] = {}
+
+
+def reset_var_interner():
+    _VAR_INTERN.clear()
+    _VAR_NAME_SORT.clear()
+
+
+def V(name: str, sort: Optional[str] = None) -> Var:
+    existing_sort = _VAR_NAME_SORT.get(name)
+    if existing_sort is None and name in _VAR_NAME_SORT:
+        if sort is not None:
+            raise ValueError(f"Variable '{name}' already declared with sort None; cannot redeclare with sort '{sort}'.")
+    elif existing_sort is not None and existing_sort != sort:
+        raise ValueError(f"Variable '{name}' already declared with sort '{existing_sort}'; cannot redeclare with sort '{sort}'.")
+
+    key = (name, sort)
+    existing = _VAR_INTERN.get(key)
+    if existing is not None:
+        return existing
+
+    v = Var(name, sort)
+    _VAR_INTERN[key] = v
+    _VAR_NAME_SORT[name] = sort
+    return v
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +172,8 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
     match pattern, target:
         case Var() as v, t:
             if v in subst:
+                if subst[v] is t:
+                    return subst
                 return subst if subst[v] == t else None
             new = subst.copy()
             new[v] = t
@@ -127,24 +195,12 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
 # LPO ordering
 # -----------------------------------------------------------------------------
 
-PRECEDENCE = {
-    "add": 3,
-    "S": 2,
-    "if": 1,
-    "eq": 1,
-    "neq": 1,
-    "0": 0,
-    "1": 0,
-    "true": 0,
-    "false": 0,
-}
+
+def _prec(config: EngineConfig, f: str):
+    return config.precedence.get(f, 0)
 
 
-def prec(f: str):
-    return PRECEDENCE.get(f, 0)
-
-
-def lpo_greater(s: Term, t: Term) -> bool:
+def _lpo_greater(config: EngineConfig, s: Term, t: Term) -> bool:
     if s is t:
         return False
 
@@ -154,23 +210,23 @@ def lpo_greater(s: Term, t: Term) -> bool:
         case Var(), Fun():
             return False
         case Fun(f, s_args), Fun(g, t_args):
-            if any(lpo_greater(si, t) or si is t for si in s_args):
+            if any(_lpo_greater(config, si, t) or si is t for si in s_args):
                 return True
-            if prec(f) > prec(g) and all(lpo_greater(s, ti) for ti in t_args):
+            if _prec(config, f) > _prec(config, g) and all(_lpo_greater(config, s, ti) for ti in t_args):
                 return True
             if f == g:
                 for si, ti in zip(s_args, t_args):
                     if si is ti:
                         continue
-                    if lpo_greater(si, ti):
+                    if _lpo_greater(config, si, ti):
                         return True
-                    if lpo_greater(ti, si):
+                    if _lpo_greater(config, ti, si):
                         return False
     return False
 
 
-def decreases(a, b):
-    return lpo_greater(a, b)
+def _decreases(config: EngineConfig, a, b):
+    return _lpo_greater(config, a, b)
 
 
 # -----------------------------------------------------------------------------
@@ -207,7 +263,7 @@ class RuleIndex:
 # -----------------------------------------------------------------------------
 
 def builtin_rules():
-    x=Var("x"); y=Var("y")
+    x=V("x"); y=V("y")
     return [
         Rule(App("eq",x,x),true),
         Rule(App("neq",x,x),false),
@@ -224,6 +280,35 @@ def builtin_rules():
 class Context:
     equalities: Tuple[Tuple[Term, Term], ...] = ()
     disequalities: Tuple[Tuple[Term,Term],...]=()
+
+
+@dataclass(frozen=True)
+class EngineConfig:
+    precedence: Dict[str, int]
+    assoc: set[str]
+    comm: set[str]
+
+
+def default_engine_config() -> EngineConfig:
+    return EngineConfig(
+        precedence={
+            "add": 3,
+            "append": 3,
+            "length": 3,
+            "S": 2,
+            "cons": 2,
+            "if": 1,
+            "eq": 1,
+            "neq": 1,
+            "0": 0,
+            "1": 0,
+            "nil": 0,
+            "true": 0,
+            "false": 0,
+        },
+        assoc={"add"},
+        comm={"add"},
+    )
 
 
 class EqClasses:
@@ -264,13 +349,13 @@ class EqClasses:
 
         if self.rank[ra] < self.rank[rb]:
             ra, rb = rb, ra
-        elif self.rank[ra] == self.rank[rb] and term_key(rb) < term_key(ra):
+        elif self.rank[ra] == self.rank[rb] and _term_key(rb) < _term_key(ra):
             ra, rb = rb, ra
 
         self.parent[rb] = ra
         if self.rank[ra] == self.rank[rb]:
             self.rank[ra] += 1
-        if rep_priority(self.rep[rb]) < rep_priority(self.rep[ra]):
+        if _rep_priority(self.rep[rb]) < _rep_priority(self.rep[ra]):
             self.rep[ra] = self.rep[rb]
         return True
 
@@ -306,7 +391,7 @@ class EqClasses:
         return self.canonical(a) is self.canonical(b)
 
 
-def build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClasses:
+def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClasses:
     eq = EqClasses()
     for l, r in ctx.equalities:
         eq._register(l)
@@ -321,75 +406,50 @@ def build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClas
     return eq
 
 
-def context_rules(ctx: Context):
+def _context_rules(ctx: Context, config: EngineConfig):
     for lhs, rhs in ctx.equalities:
-        if isinstance(lhs, Var):
-            continue
-        if decreases(lhs, rhs):
+        if _decreases(config, lhs, rhs):
             yield Rule(lhs, rhs)
-        elif decreases(rhs, lhs):
+        elif _decreases(config, rhs, lhs):
             yield Rule(rhs, lhs)
+        else:
+            # Deterministic fallback orientation for context/IH equalities
+            # when the ordering does not decide.
+            if _term_key(lhs) <= _term_key(rhs):
+                yield Rule(rhs, lhs)
+            else:
+                yield Rule(lhs, rhs)
 
 
 # -----------------------------------------------------------------------------
 # Conditions
 # -----------------------------------------------------------------------------
 
-def holds(l, r, rules, ctx, eq_classes: Optional[EqClasses] = None):
-    l2 = normalize(l, rules, ctx)
-    r2 = normalize(r, rules, ctx)
-    eq = eq_classes if eq_classes is not None else build_eq_classes(ctx, (l2, r2))
-
-    for a, b in ctx.disequalities:
-        if eq.are_equal(l2, a) and eq.are_equal(r2, b):
-            return False
-        if eq.are_equal(l2, b) and eq.are_equal(r2, a):
-            return False
-
-    if eq.are_equal(l2, r2):
-        return True
-
-    return False
-
-
-def conditions_hold(conditions, subst, rules, ctx, eq_classes: Optional[EqClasses] = None):
-    for l, r in conditions:
-        l2 = apply_subst(l, subst)
-        r2 = apply_subst(r, subst)
-        if not holds(l2, r2, rules, ctx, eq_classes):
-            return False
-    return True
-
-
 # -----------------------------------------------------------------------------
 # AC normalization
 # -----------------------------------------------------------------------------
 
-ASSOC = {"add"}
-COMM = {"add"}
-
-
-def term_key(t: Term):
+def _term_key(t: Term):
     match t:
         case Fun(f, args):
-            return (0, f, len(args), tuple(term_key(a) for a in args))
+            return (0, f, len(args), tuple(_term_key(a) for a in args))
         case Var(n):
             return (1, n)
 
 
-def rep_priority(t: Term):
+def _rep_priority(t: Term):
     match t:
         case Fun(_, args) if not args:
-            return (0, term_key(t))
+            return (0, _term_key(t))
         case Var():
-            return (1, term_key(t))
+            return (1, _term_key(t))
         case Fun():
-            return (2, term_key(t))
+            return (2, _term_key(t))
 
 
-def ac_normalize(t: Term) -> Term:
+def _ac_normalize(config: EngineConfig, t: Term) -> Term:
     match t:
-        case Fun(f, (a, b)) if f in ASSOC:
+        case Fun(f, (a, b)) if f in config.assoc:
             flat = []
 
             def collect(x):
@@ -402,8 +462,8 @@ def ac_normalize(t: Term) -> Term:
 
             collect(t)
 
-            if f in COMM:
-                flat.sort(key=term_key)
+            if f in config.comm:
+                flat.sort(key=_term_key)
 
             res = flat[-1]
             for x in reversed(flat[:-1]):
@@ -416,9 +476,6 @@ def ac_normalize(t: Term) -> Term:
 # -----------------------------------------------------------------------------
 # Ground caching + memo
 # -----------------------------------------------------------------------------
-
-GROUND_CACHE: Dict[Term, Term] = {}
-
 
 def is_ground(t: Term) -> bool:
     match t:
@@ -446,97 +503,208 @@ class Trace:
     def add(self, b, a, r):
         self.steps.append(TraceStep(b, a, r))
 
-        
+
+@dataclass
+class ProofNode:
+    kind: str
+    clause: Clause
+    note: str = ""
+    children: list["ProofNode"] = None
+    solved: Optional[bool] = None
+
+    def __post_init__(self):
+        if self.children is None:
+            self.children = []
+
+
+@dataclass
+class ProofTrace:
+    roots: list[ProofNode]
+
+    def __init__(self):
+        self.roots = []
+
+
+def _new_node(kind: str, clause: Clause, note: str = "") -> ProofNode:
+    return ProofNode(kind=kind, clause=clause, note=note, children=[])
+
+
+def render_proof_trace(trace: ProofTrace) -> str:
+    lines: list[str] = []
+
+    def visit(node: ProofNode, indent: int):
+        pad = "  " * indent
+        status = ""
+        if node.solved is True:
+            status = " [solved]"
+        elif node.solved is False:
+            status = " [failed]"
+        note = f" :: {node.note}" if node.note else ""
+        lines.append(f"{pad}- {node.kind}{status}{note} -> {node.clause.goal}")
+        for c in node.children:
+            visit(c, indent + 1)
+
+    for r in trace.roots:
+        visit(r, 0)
+    return "\n".join(lines)
+
+
 # -----------------------------------------------------------------------------
-# Rewriting
+# Engine (rewrite + normalize + condition checks)
 # -----------------------------------------------------------------------------
 
 
-def rewrite_once(term, rule, rules, ctx, trace=None, eq_classes: Optional[EqClasses] = None):
-    subst = match(rule.lhs, term)
-    if subst is None:
-        return None
+@dataclass
+class Engine:
+    rules: list[Rule]
+    ctx: Context = Context()
+    trace: Optional[Trace] = None
+    fuel: int = 1000
+    config: Optional[EngineConfig] = None
+    ground_cache: Optional[Dict[Term, Term]] = None
+    schemes: Optional[Dict[str, "InductionScheme"]] = None
 
-    if rule.conditions and not conditions_hold(rule.conditions, subst, rules, ctx, eq_classes):
-        return None
+    def __post_init__(self):
+        self.index = RuleIndex(self.rules)
+        self.memo: Dict[Term, Term] = {}
+        self.eq_classes: Optional[EqClasses] = None
+        if self.config is None:
+            self.config = default_engine_config()
+        if self.ground_cache is None:
+            self.ground_cache = {}
+        if self.schemes is None:
+            self.schemes = {}
 
-    new = apply_subst(rule.rhs, subst)
+    def _ensure_eq_classes(self, term: Optional[Term] = None):
+        if self.eq_classes is None:
+            extra = (term,) if term is not None else ()
+            self.eq_classes = _build_eq_classes(self.ctx, extra)
+        elif term is not None:
+            self.eq_classes._register(term)
+            self.eq_classes.close_congruence()
 
-    # FIX: allow conditional rules even if not decreasing
-    if not rule.conditions:
-        if not decreases(term, new):
+    def holds(self, l: Term, r: Term) -> bool:
+        l2 = self.normalize(l)
+        r2 = self.normalize(r)
+        self._ensure_eq_classes(l2)
+        self._ensure_eq_classes(r2)
+        assert self.eq_classes is not None
+        eq = self.eq_classes
+        for a, b in self.ctx.disequalities:
+            if eq.are_equal(l2, a) and eq.are_equal(r2, b):
+                return False
+            if eq.are_equal(l2, b) and eq.are_equal(r2, a):
+                return False
+        return eq.are_equal(l2, r2)
+
+    def conditions_hold(self, conditions, subst) -> bool:
+        for l, r in conditions:
+            l2 = apply_subst(l, subst)
+            r2 = apply_subst(r, subst)
+            if not self.holds(l2, r2):
+                return False
+        return True
+
+    def rewrite_once(self, term: Term, rule: Rule):
+        subst = match(rule.lhs, term)
+        if subst is None:
             return None
+        if rule.conditions and not self.conditions_hold(rule.conditions, subst):
+            return None
+        new = apply_subst(rule.rhs, subst)
+        assert self.config is not None
+        if not rule.conditions and not _decreases(self.config, term, new):
+            return None
+        if self.trace:
+            self.trace.add(term, new, rule)
+        return new
 
-    if trace:
-        trace.add(term, new, rule)
+    def rewrite_term(self, term: Term):
+        if term in self.memo:
+            return self.memo[term]
 
-    return new
+        self._ensure_eq_classes(term)
+        assert self.eq_classes is not None
+        term = self.eq_classes.canonical(term)
+
+        match term:
+            case Fun(f, args):
+                args = tuple(self.rewrite_term(a) for a in args)
+                term = Fun(f, args)
+
+        assert self.config is not None
+        term = _ac_normalize(self.config, term)
+        term = self.eq_classes.canonical(term)
+
+        for r in self.index.get(term):
+            t2 = self.rewrite_once(term, r)
+            if t2 is not None:
+                self.memo[term] = t2
+                return t2
+
+        for r in _context_rules(self.ctx, self.config):
+            t2 = self.rewrite_once(term, r)
+            if t2 is not None:
+                self.memo[term] = t2
+                return t2
+
+        self.memo[term] = term
+        return term
+
+    def normalize(self, term: Term):
+        original = term
+        self._ensure_eq_classes(term)
+
+        for _ in range(self.fuel):
+            if is_ground(term) and term in self.ground_cache:
+                return self.ground_cache[term]
+
+            t2 = self.rewrite_term(term)
+            if t2 is term:
+                break
+            term = t2
+
+        if is_ground(original):
+            self.ground_cache[original] = term
+        if is_ground(term):
+            self.ground_cache[term] = term
+        return term
+
+    def register_scheme(self, scheme: "InductionScheme"):
+        self.schemes[scheme.name] = scheme
+
+    def get_scheme(self, name: str) -> Optional["InductionScheme"]:
+        return self.schemes.get(name)
+
+    def get_scheme_for_sort(self, sort: str) -> Optional["InductionScheme"]:
+        for scheme in self.schemes.values():
+            if scheme.sort == sort:
+                return scheme
+        return None
 
 
-def rewrite(term, index: RuleIndex, rules, ctx: Context, trace=None, memo=None, eq_classes: Optional[EqClasses] = None):
-    if memo is not None and term in memo:
-        return memo[term]
-
-    if eq_classes is not None:
-        term = eq_classes.canonical(term)
-
-    match term:
-        case Fun(f, args):
-            args = tuple(rewrite(a, index, rules, ctx, trace, memo, eq_classes) for a in args)
-            term = Fun(f, args)
-
-    term = ac_normalize(term)
-    if eq_classes is not None:
-        term = eq_classes.canonical(term)
-
-    for r in index.get(term):
-        t2 = rewrite_once(term, r, rules, ctx, trace, eq_classes)
-        if t2 is not None:
-            if memo is not None:
-                memo[term] = t2
-            return t2
-
-    for r in context_rules(ctx):
-        t2 = rewrite_once(term, r, rules, ctx, trace, eq_classes)
-        if t2 is not None:
-            if memo is not None:
-                memo[term] = t2
-            return t2
-
-    if memo is not None:
-        memo[term] = term
-
-    return term
+def make_engine(
+    rules,
+    ctx: Context = Context(),
+    trace=None,
+    fuel: int = 1000,
+    config: Optional[EngineConfig] = None,
+    ground_cache: Optional[Dict[Term, Term]] = None,
+    schemes: Optional[Dict[str, "InductionScheme"]] = None,
+) -> Engine:
+    return Engine(
+        rules=rules,
+        ctx=ctx,
+        trace=trace,
+        fuel=fuel,
+        config=config,
+        ground_cache=ground_cache,
+        schemes=schemes,
+    )
 
 
-# -----------------------------------------------------------------------------
-# Normalize
-# -----------------------------------------------------------------------------
-
-
-def normalize(term, rules, ctx: Context = Context(), trace=None, fuel=1000):
-    index = RuleIndex(rules)
-    memo: Dict[Term, Term] = {}
-    original = term
-    eq_classes = build_eq_classes(ctx, (term,))
-
-    for _ in range(fuel):
-        if is_ground(term) and term in GROUND_CACHE:
-            return GROUND_CACHE[term]
-
-        t2 = rewrite(term, index, rules, ctx, trace, memo, eq_classes)
-
-        if t2 is term:
-            break
-
-        term = t2
-
-    if is_ground(original):
-        GROUND_CACHE[original] = term
-    if is_ground(term):
-        GROUND_CACHE[term] = term
-
-    return term
+def normalize(term, engine: Engine):
+    return engine.normalize(term)
 
 
 # -----------------------------------------------------------------------------
@@ -584,22 +752,16 @@ def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") ->
     )
 
 
-INDUCTION_SCHEMES: Dict[str, InductionScheme] = {}
+def register_induction_scheme(engine: Engine, scheme: InductionScheme):
+    engine.register_scheme(scheme)
 
 
-def register_induction_scheme(scheme: InductionScheme):
-    INDUCTION_SCHEMES[scheme.name] = scheme
+def get_induction_scheme(engine: Engine, name: str) -> Optional[InductionScheme]:
+    return engine.get_scheme(name)
 
 
-def get_induction_scheme(name: str) -> Optional[InductionScheme]:
-    return INDUCTION_SCHEMES.get(name)
-
-
-def get_induction_scheme_for_sort(sort: str) -> Optional[InductionScheme]:
-    for scheme in INDUCTION_SCHEMES.values():
-        if scheme.sort == sort:
-            return scheme
-    return None
+def get_induction_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
+    return engine.get_scheme_for_sort(sort)
 
 
 def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
@@ -644,7 +806,7 @@ def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Va
         name = f"{base}_{i}"
         if name not in used_names:
             used_names.add(name)
-            return Var(name, sort)
+            return V(name, sort)
         i += 1
 
 
@@ -679,9 +841,17 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
     return branches
 
 
-def simplify_clause(clause: Clause, rules):
-    ctx = Context(clause.assumptions)
-    new_goal = normalize(clause.goal, rules, ctx)
+def simplify_clause(clause: Clause, engine: Engine):
+    local_engine = make_engine(
+        rules=engine.rules,
+        ctx=Context(clause.assumptions),
+        trace=engine.trace,
+        fuel=engine.fuel,
+        config=engine.config,
+        ground_cache=engine.ground_cache,
+        schemes=engine.schemes,
+    )
+    new_goal = normalize(clause.goal, local_engine)
     return Clause(clause.assumptions, new_goal)
 
 
@@ -716,60 +886,143 @@ def split_clause(clause: Clause) -> list[Clause]:
             return [clause]
 
 
-def prove(clause: Clause, rules, depth: int = 5) -> bool:
+def _prove_kernel(
+    clause: Clause,
+    engine: Engine,
+    depth: int,
+    induction_handler=None,
+    proof_node: Optional[ProofNode] = None,
+) -> bool:
+    if proof_node is not None:
+        proof_node.note = f"depth={depth}"
     if depth <= 0:
+        if proof_node is not None:
+            proof_node.solved = False
         return False
 
-    simplified = simplify_clause(clause, rules)
+    simplified = simplify_clause(clause, engine)
+    if proof_node is not None:
+        proof_node.children.append(_new_node("simplify", simplified))
     if clause_solved(simplified):
+        if proof_node is not None:
+            proof_node.solved = True
         return True
 
     branches = split_clause(simplified)
     if len(branches) == 1:
+        if induction_handler is not None:
+            induced = induction_handler(simplified, depth, proof_node)
+            if induced is not None:
+                if proof_node is not None:
+                    proof_node.solved = induced
+                return induced
+        if proof_node is not None:
+            proof_node.solved = False
         return False
 
     next_depth = depth - 1
-    return all(prove(branch, rules, next_depth) for branch in branches)
+    branch_results = []
+    for i, branch in enumerate(branches):
+        child = _new_node("branch", branch, note=f"index={i}")
+        if proof_node is not None:
+            proof_node.children.append(child)
+        branch_results.append(_prove_kernel(branch, engine, next_depth, induction_handler, child))
+    out = all(branch_results)
+    if proof_node is not None:
+        proof_node.solved = out
+    return out
+
+
+def prove(clause: Clause, engine: Engine, depth: int = 5, proof_node: Optional[ProofNode] = None) -> bool:
+    return _prove_kernel(clause, engine, depth, proof_node=proof_node)
 
 
 def prove_with_induction(
     clause: Clause,
-    rules,
+    engine: Engine,
     var: Var,
     scheme: InductionScheme,
     depth: int = 5,
     induction_depth: int = 1,
+    proof_node: Optional[ProofNode] = None,
 ) -> bool:
     if not var_matches_scheme(var, scheme):
-        return False
-    if prove(clause, rules, depth):
-        return True
-    if induction_depth <= 0:
-        return False
-
-    branches = induction_branches(clause, var, scheme)
-    if not branches:
+        if proof_node is not None:
+            proof_node.solved = False
+            proof_node.note = f"sort mismatch for scheme {scheme.name}"
         return False
 
-    next_induction = induction_depth - 1
-    return all(
-        prove_with_induction(branch, rules, var, scheme, depth, next_induction)
-        for branch in branches
-    )
+    def induction_handler(simplified_clause: Clause, current_depth: int, current_node: Optional[ProofNode]):
+        if induction_depth <= 0:
+            return False
+        branches = induction_branches(simplified_clause, var, scheme)
+        if not branches:
+            return False
+        induction_node = _new_node("induction", simplified_clause, note=f"var={var.name}, scheme={scheme.name}")
+        if current_node is not None:
+            current_node.children.append(induction_node)
+        next_induction = induction_depth - 1
+        branch_results = []
+        for i, branch in enumerate(branches):
+            child = _new_node("induction-branch", branch, note=f"index={i}")
+            induction_node.children.append(child)
+            branch_results.append(
+                prove_with_induction(branch, engine, var, scheme, current_depth, next_induction, child)
+            )
+        induction_node.solved = all(branch_results)
+        return induction_node.solved
+
+    return _prove_kernel(clause, engine, depth, induction_handler, proof_node)
 
 
 def prove_with_registered_induction(
     clause: Clause,
-    rules,
+    engine: Engine,
     var: Var,
     scheme_name: str,
     depth: int = 5,
     induction_depth: int = 1,
+    proof_node: Optional[ProofNode] = None,
 ) -> bool:
-    scheme = get_induction_scheme(scheme_name)
+    scheme = get_induction_scheme(engine, scheme_name)
     if scheme is None:
+        if proof_node is not None:
+            proof_node.solved = False
+            proof_node.note = f"unknown scheme {scheme_name}"
         return False
-    return prove_with_induction(clause, rules, var, scheme, depth, induction_depth)
+    return prove_with_induction(clause, engine, var, scheme, depth, induction_depth, proof_node)
+
+
+def prove_with_trace(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    var: Optional[Var] = None,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+    induction_depth: int = 1,
+) -> tuple[bool, ProofTrace]:
+    trace = ProofTrace()
+    root = _new_node("prove", clause)
+    trace.roots.append(root)
+
+    if var is None:
+        ok = prove(clause, engine, depth=depth, proof_node=root)
+        return ok, trace
+    if scheme is not None:
+        ok = prove_with_induction(
+            clause, engine, var, scheme, depth=depth, induction_depth=induction_depth, proof_node=root
+        )
+        return ok, trace
+    if scheme_name is not None:
+        ok = prove_with_registered_induction(
+            clause, engine, var, scheme_name, depth=depth, induction_depth=induction_depth, proof_node=root
+        )
+        return ok, trace
+
+    root.note = "missing scheme for induction trace"
+    root.solved = False
+    return False, trace
 
 
 # -----------------------------------------------------------------------------
@@ -777,13 +1030,14 @@ def prove_with_registered_induction(
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    x = Var("x")
-    y = Var("y")
-    z = Var("z")
-    x_nat = Var("xn", "Nat")
-    xs = Var("xs", "List")
-    h = Var("h")
-    t = Var("t")
+    reset_var_interner()
+    x = V("x")
+    y = V("y")
+    z = V("z")
+    x_nat = V("xn", "Nat")
+    xs = V("xs", "List")
+    h = V("h")
+    t = V("t")
 
     zero = Const("0")
     one = Const("1")
@@ -793,6 +1047,7 @@ if __name__ == "__main__":
     nil = Const("nil")
     cons = lambda a, b: App("cons", a, b)
     app = lambda a, b: App("append", a, b)
+    length = lambda a: App("length", a)
     eq = lambda a, b: App("eq", a, b)
     neq = lambda a,b:App("neq",a,b)
     f = lambda a: App("f", a)
@@ -804,12 +1059,20 @@ if __name__ == "__main__":
 
     r4 = Rule(app(nil, xs), xs)
     r5 = Rule(app(cons(h, t), xs), cons(h, app(t, xs)))
+    r6 = Rule(length(nil), zero)
+    r7 = Rule(length(cons(h, t)), S(length(t)))
+    r8 = Rule(add(x, zero), x)
+    r9 = Rule(add(x, S(y)), S(add(x, y)))
 
-    rules = builtin_rules() + [r1, r2, r3, r4, r5]
+    rules = builtin_rules() + [r1, r2, r3, r4, r5, r6, r7, r8, r9]
+    shared_cache: Dict[Term, Term] = {}
+    shared_schemes: Dict[str, InductionScheme] = {}
+    shared_config = default_engine_config()
+    engine = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
 
     # Test 1
     t = add(S(S(zero)), S(zero))
-    res = normalize(t, rules)
+    res = normalize(t, engine)
     print("Result:", res)
     assert str(res) == "S(S(S(0)))"
 
@@ -824,46 +1087,47 @@ if __name__ == "__main__":
     assert m[x] is zero
 
     # Test 5
-    assert str(normalize(add(y, add(x, z)), rules)) == "add(x, add(y, z))"
+    assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
 
     # Test 6
     tr = Trace()
-    normalize(add(S(zero), zero), rules, trace=tr)
+    tr_engine = make_engine(rules=rules, trace=tr, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    normalize(add(S(zero), zero), tr_engine)
     assert len(tr.steps) > 0
 
     # Test 7
     clause = Clause(((x, zero),), add(x, S(zero)))
-    simplified = simplify_clause(clause, rules)
+    simplified = simplify_clause(clause, engine)
     assert str(simplified.goal) == "S(0)"
 
     # Test 8
     clause2 = Clause((), eq(zero, zero))
-    print(simplify_clause(clause2, rules))
-    assert clause_solved(simplify_clause(clause2, rules))
+    print(simplify_clause(clause2, engine))
+    assert clause_solved(simplify_clause(clause2, engine))
 
     # Test 9
     t = add(zero, zero)
-    r = normalize(t, rules)
-    assert t in GROUND_CACHE
-    assert GROUND_CACHE[t] is r
+    r = normalize(t, engine)
+    assert t in shared_cache
+    assert shared_cache[t] is r
 
     # Test 10
     t = add(zero, zero)
-    r1n = normalize(t, rules)
-    r2n = normalize(t, rules)
+    r1n = normalize(t, engine)
+    r2n = normalize(t, engine)
     assert r1n is r2n
 
     # Test 11
-    assert str(normalize(f(zero), rules)) == "1"
-    assert str(normalize(f(S(zero)), rules)) == "f(S(0))"
+    assert str(normalize(f(zero), engine)) == "1"
+    assert str(normalize(f(S(zero)), engine)) == "f(S(0))"
 
     # Test 12
-    assert normalize(eq(zero,zero),rules) == true
-    assert normalize(neq(zero,zero),rules) == false
+    assert normalize(eq(zero,zero), engine) == true
+    assert normalize(neq(zero,zero), engine) == false
 
     # Test 13: equality closure x = y, y = 0 => x = 0
     clause3 = Clause(((x, y), (y, zero)), eq(x, zero))
-    assert clause_solved(simplify_clause(clause3, rules))
+    assert clause_solved(simplify_clause(clause3, engine))
 
     # Test 14: induction obligations for nat produce base + step (with IH)
     nat_scheme = nat_induction_scheme(zero)
@@ -879,23 +1143,23 @@ if __name__ == "__main__":
     assert str(ih_r) == "x_ih_0"
 
     # Test 15: prove add(x, 0) = x by explicit nat induction
-    assert prove_with_induction(clause4, rules, x, nat_scheme, depth=8, induction_depth=1)
+    assert prove_with_induction(clause4, engine, x, nat_scheme, depth=8, induction_depth=1)
 
     # Test 16: a clearly false ground goal is not proven
     bad = Clause((), eq(add(zero, one), zero))
-    assert not prove(bad, rules, depth=8)
+    assert not prove(bad, engine, depth=8)
 
     # Test 17: sort mismatch blocks induction
-    assert not prove_with_induction(clause4, rules, xs, nat_scheme, depth=8, induction_depth=1)
+    assert not prove_with_induction(clause4, engine, xs, nat_scheme, depth=8, induction_depth=1)
     assert not induction_branches(clause4, xs, nat_scheme)
 
     # Test 18: scheme registry lookup and proof
-    register_induction_scheme(nat_scheme)
-    register_induction_scheme(list_scheme)
-    assert get_induction_scheme("nat") is nat_scheme
-    assert get_induction_scheme_for_sort("List") is list_scheme
-    assert prove_with_registered_induction(clause4, rules, x_nat, "nat", depth=8, induction_depth=1)
-    assert not prove_with_registered_induction(clause4, rules, x_nat, "list", depth=8, induction_depth=1)
+    register_induction_scheme(engine, nat_scheme)
+    register_induction_scheme(engine, list_scheme)
+    assert get_induction_scheme(engine, "nat") is nat_scheme
+    assert get_induction_scheme_for_sort(engine, "List") is list_scheme
+    assert prove_with_registered_induction(clause4, engine, x_nat, "nat", depth=8, induction_depth=1)
+    assert not prove_with_registered_induction(clause4, engine, x_nat, "list", depth=8, induction_depth=1)
 
     # Test 19: list induction branch shape
     list_goal = Clause((), eq(app(xs, nil), xs))
@@ -909,6 +1173,88 @@ if __name__ == "__main__":
     assert str(ih_r2) == "xs_ih_0"
 
     # Test 20: prove append(xs, nil) = xs by explicit list induction
-    assert prove_with_induction(list_goal, rules, xs, list_scheme, depth=10, induction_depth=1)
+    assert prove_with_induction(list_goal, engine, xs, list_scheme, depth=10, induction_depth=1)
+
+    # Test 21: prove append associativity by list induction
+    ys = V("ys", "List")
+    zs = V("zs", "List")
+    assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
+    assert prove_with_induction(assoc_goal, engine, xs, list_scheme, depth=12, induction_depth=1)
+
+    # Test 22: prove length(append(xs, nil)) = length(xs) by list induction
+    len_append_nil_goal = Clause((), eq(length(app(xs, nil)), length(xs)))
+    assert prove_with_induction(len_append_nil_goal, engine, xs, list_scheme, depth=12, induction_depth=1)
+
+    # Test 23: prove length(append(xs, ys)) = add(length(xs), length(ys))
+    len_append_goal = Clause((), eq(length(app(xs, ys)), add(length(xs), length(ys))))
+    assert prove_with_induction(len_append_goal, engine, xs, list_scheme, depth=14, induction_depth=1)
+
+    # Test 24: shared cache can be reused across engines
+    term_shared = add(zero, zero)
+    a = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    b = make_engine(rules=rules, config=shared_config, ground_cache=shared_cache, schemes=shared_schemes)
+    normalize(term_shared, a)
+    assert term_shared in shared_cache
+    assert normalize(term_shared, b) is shared_cache[term_shared]
+
+    # Test 25: isolated caches are independent
+    iso_a_cache: Dict[Term, Term] = {}
+    iso_b_cache: Dict[Term, Term] = {}
+    iso_a = make_engine(rules=rules, config=shared_config, ground_cache=iso_a_cache, schemes=shared_schemes)
+    iso_b = make_engine(rules=rules, config=shared_config, ground_cache=iso_b_cache, schemes=shared_schemes)
+    normalize(term_shared, iso_a)
+    assert term_shared in iso_a_cache
+    assert term_shared not in iso_b_cache
+
+    # Test 26: per-engine config isolation (AC metadata)
+    no_ac_config = EngineConfig(precedence=shared_config.precedence, assoc=set(), comm=set())
+    no_ac_engine = make_engine(rules=rules, config=no_ac_config, ground_cache={}, schemes={})
+    assert str(normalize(add(y, add(x, z)), no_ac_engine)) == "add(y, add(x, z))"
+    assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
+
+    # Test 27: variable interning returns canonical identities
+    vx1 = V("vx")
+    vx2 = V("vx")
+    assert vx1 is vx2
+    vn1 = V("vn", "Nat")
+    vn2 = V("vn", "Nat")
+    assert vn1 is vn2
+
+    # Test 28: strict same-name sort conflicts raise immediately
+    reset_var_interner()
+    _ = V("u")
+    try:
+        V("u", "Nat")
+        assert False
+    except ValueError:
+        pass
+    reset_var_interner()
+    _ = V("u", "Nat")
+    try:
+        V("u", "List")
+        assert False
+    except ValueError:
+        pass
+
+    # Re-establish interned vars used in prior prover tests if extended below
+    reset_var_interner()
+    x = V("x")
+    y = V("y")
+    z = V("z")
+    x_nat = V("xn", "Nat")
+    xs = V("xs", "List")
+    h = V("h")
+    t = V("t")
+
+    # Test 29: proof trace captures induction events and renders nicely
+    ok_trace, ptrace = prove_with_trace(assoc_goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1)
+    assert ok_trace
+    rendered = render_proof_trace(ptrace)
+    assert "induction" in rendered
+    assert "scheme=list" in rendered
+    assert "induction-branch" in rendered
+
+    print("\nAppend associativity proof trace:")
+    print(rendered)
 
     print("All tests passed.")

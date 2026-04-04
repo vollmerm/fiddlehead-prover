@@ -63,6 +63,8 @@ __all__ = [
     "prove_checked",
     "check_certificate",
     "Lemma",
+    "TheoremEnvironment",
+    "get_theorem_environment",
     "ProofSession",
 ]
 
@@ -570,6 +572,7 @@ class Engine:
     config: Optional[EngineConfig] = None
     ground_cache: Optional[Dict[Term, Term]] = None
     schemes: Optional[Dict[str, "InductionScheme"]] = None
+    theory: Optional["TheoremEnvironment"] = None
 
     def __post_init__(self):
         self.index = RuleIndex(self.rules)
@@ -689,6 +692,19 @@ class Engine:
                 return scheme
         return None
 
+    def reset_rules(self, rules: list[Rule]):
+        self.rules = list(rules)
+        self.index = RuleIndex(self.rules)
+        self.memo = {}
+        self.eq_classes = None
+        if self.ground_cache is not None:
+            self.ground_cache.clear()
+
+    def get_theory(self) -> "TheoremEnvironment":
+        if self.theory is None:
+            self.theory = TheoremEnvironment(self, self.rules)
+        return self.theory
+
 
 def make_engine(
     rules,
@@ -769,6 +785,10 @@ def get_induction_scheme(engine: Engine, name: str) -> Optional[InductionScheme]
 
 def get_induction_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
     return engine.get_scheme_for_sort(sort)
+
+
+def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
+    return engine.get_theory()
 
 
 def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
@@ -1239,11 +1259,120 @@ class Lemma:
     certificate: ProofCertificate
 
 
+def _contains_symbol(term: Term, symbol: str) -> bool:
+    match term:
+        case Var():
+            return False
+        case Fun(sym, args):
+            if sym == symbol:
+                return True
+            return any(_contains_symbol(a, symbol) for a in args)
+
+
+class TheoremEnvironment:
+    def __init__(self, engine: Engine, base_rules: list[Rule]):
+        self.engine = engine
+        self.base_rules: list[Rule] = list(base_rules)
+        self.lemmas: Dict[str, Lemma] = {}
+        self.definitions: Dict[str, Rule] = {}
+        self.lemma_rewrites: Dict[str, Rule] = {}
+        self.scoped_rule_sets: Dict[str, list[Rule]] = {}
+        self.active_scopes: set[str] = set()
+
+    def _sync_engine_rules(self):
+        active_rules = list(self.base_rules)
+        for scope, rules in self.scoped_rule_sets.items():
+            if scope in self.active_scopes:
+                active_rules.extend(rules)
+        self.engine.reset_rules(active_rules)
+
+    def create_scope(self, name: str):
+        self.scoped_rule_sets.setdefault(name, [])
+
+    def activate_scope(self, name: str):
+        if name not in self.scoped_rule_sets:
+            raise ValueError(f"Unknown scope: {name}")
+        self.active_scopes.add(name)
+        self._sync_engine_rules()
+
+    def deactivate_scope(self, name: str):
+        self.active_scopes.discard(name)
+        self._sync_engine_rules()
+
+    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2):
+        if lemma.clause.assumptions:
+            raise ValueError("Only assumption-free lemmas can be registered in this minimal environment.")
+        if goal_equality(lemma.clause.goal) is None:
+            raise ValueError("Lemma goal must be an equality.")
+        if lemma.certificate.clause != lemma.clause:
+            raise ValueError("Lemma certificate root does not match lemma clause.")
+        if not check_certificate(lemma.certificate, self.engine, depth=depth, induction_depth=induction_depth):
+            raise ValueError("Lemma certificate failed validation.")
+        self.lemmas[lemma.name] = lemma
+
+    def register_definition(self, name: str, lhs: Term, rhs: Term, scope: str = "definitions"):
+        match lhs:
+            case Fun(sym, _):
+                if _contains_symbol(rhs, sym):
+                    raise ValueError("Recursive definitions are not supported in this phase.")
+                assert self.engine.config is not None
+                if sym not in self.engine.config.precedence:
+                    base = max(self.engine.config.precedence.values(), default=0)
+                    self.engine.config.precedence[sym] = base + 1
+            case _:
+                raise ValueError("Definition lhs must be a function application.")
+        rule = Rule(lhs, rhs)
+        self.definitions[name] = rule
+        self.scoped_rule_sets.setdefault(scope, []).append(rule)
+        if scope in self.active_scopes:
+            self._sync_engine_rules()
+
+    def register_lemma_rewrite(
+        self,
+        lemma_name: str,
+        scope: str = "lemmas",
+        orientation: str = "auto",
+    ) -> Rule:
+        lemma = self.lemmas.get(lemma_name)
+        if lemma is None:
+            raise ValueError(f"Unknown lemma: {lemma_name}")
+        eq_goal = goal_equality(lemma.clause.goal)
+        if eq_goal is None:
+            raise ValueError("Lemma goal must be an equality.")
+        lhs, rhs = eq_goal
+        assert self.engine.config is not None
+
+        if orientation == "auto":
+            if _decreases(self.engine.config, lhs, rhs):
+                rule = Rule(lhs, rhs)
+            elif _decreases(self.engine.config, rhs, lhs):
+                rule = Rule(rhs, lhs)
+            else:
+                raise ValueError("Lemma cannot be oriented into a decreasing rewrite rule.")
+        elif orientation == "lhs_to_rhs":
+            if not _decreases(self.engine.config, lhs, rhs):
+                raise ValueError("Requested orientation lhs_to_rhs is not decreasing.")
+            rule = Rule(lhs, rhs)
+        elif orientation == "rhs_to_lhs":
+            if not _decreases(self.engine.config, rhs, lhs):
+                raise ValueError("Requested orientation rhs_to_lhs is not decreasing.")
+            rule = Rule(rhs, lhs)
+        else:
+            raise ValueError(f"Unknown orientation: {orientation}")
+
+        self.lemma_rewrites[lemma_name] = rule
+        self.scoped_rule_sets.setdefault(scope, []).append(rule)
+        if scope in self.active_scopes:
+            self._sync_engine_rules()
+        return rule
+
+
 class ProofSession:
     def __init__(self, clause: Clause, engine: Engine):
         self.engine = engine
         self.goals: list[Clause] = [clause]
-        self.lemmas: Dict[str, Lemma] = {}
+        self.theory = get_theorem_environment(engine)
+        self.lemmas = self.theory.lemmas
         self.trace = ProofTrace()
         self._trace_root = _new_node("session", clause, note="interactive")
         self.trace.roots.append(self._trace_root)
@@ -1315,21 +1444,13 @@ class ProofSession:
         self.goals = self.goals[1:]
 
     def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2):
-        if lemma.clause.assumptions:
-            raise ValueError("Only assumption-free lemmas can be registered in this minimal session.")
-        if goal_equality(lemma.clause.goal) is None:
-            raise ValueError("Lemma goal must be an equality.")
-        if lemma.certificate.clause != lemma.clause:
-            raise ValueError("Lemma certificate root does not match lemma clause.")
-        if not check_certificate(lemma.certificate, self.engine, depth=depth, induction_depth=induction_depth):
-            raise ValueError("Lemma certificate failed validation.")
-        self.lemmas[lemma.name] = lemma
+        self.theory.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
 
     def apply_lemma(self, name: str):
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        lemma = self.lemmas.get(name)
+        lemma = self.theory.lemmas.get(name)
         if lemma is None:
             raise ValueError(f"Unknown lemma: {name}")
         eq_goal = goal_equality(lemma.clause.goal)
@@ -1339,6 +1460,20 @@ class ProofSession:
         next_goal = Clause(assumptions, cur.goal)
         self._record("session-apply-lemma", original, note=name, children=[_new_node("goal", next_goal)])
         self.goals[0] = next_goal
+
+    def register_definition(self, name: str, lhs: Term, rhs: Term, scope: str = "definitions"):
+        self.theory.register_definition(name, lhs, rhs, scope=scope)
+
+    def register_lemma_rewrite(self, lemma_name: str, scope: str = "lemmas", orientation: str = "auto"):
+        self.theory.register_lemma_rewrite(lemma_name, scope=scope, orientation=orientation)
+
+    def activate_scope(self, name: str):
+        self.theory.activate_scope(name)
+        self._record("session-activate-scope", self.current_goal() or Clause((), true), note=name)
+
+    def deactivate_scope(self, name: str):
+        self.theory.deactivate_scope(name)
+        self._record("session-deactivate-scope", self.current_goal() or Clause((), true), note=name)
 
     def qed(self) -> bool:
         done = not self.goals
@@ -1624,6 +1759,56 @@ if __name__ == "__main__":
     assert "session-induct" in sess_trace_rendered
     assert "session-simp" in sess_trace_rendered
     assert "session-exact" in sess_trace_rendered
+
+    # Test 36: theorem environment supports scoped lemma rewrites
+    scoped_rules = builtin_rules() + [r1, r2, r4, r5]
+    scoped_engine = make_engine(rules=scoped_rules, config=shared_config, ground_cache={}, schemes={})
+    scoped_theory = get_theorem_environment(scoped_engine)
+    scoped_list = list_induction_scheme()
+    register_induction_scheme(scoped_engine, scoped_list)
+    scoped_clause = Clause((), eq(app(xs, nil), xs))
+    ok_scoped_cert, scoped_cert = prove_checked(
+        scoped_clause, scoped_engine, depth=10, var=xs, scheme=scoped_list, induction_depth=1
+    )
+    assert ok_scoped_cert and scoped_cert is not None
+    scoped_lemma = Lemma("append_right_id_scoped", scoped_clause, scoped_cert)
+    scoped_theory.register_lemma(scoped_lemma, depth=10, induction_depth=1)
+    scoped_theory.register_lemma_rewrite("append_right_id_scoped", scope="list_scope", orientation="auto")
+    assert str(normalize(app(xs, nil), scoped_engine)) == "append(xs, nil)"
+    scoped_theory.activate_scope("list_scope")
+    assert str(normalize(app(xs, nil), scoped_engine)) == "xs"
+    scoped_theory.deactivate_scope("list_scope")
+    assert str(normalize(app(xs, nil), scoped_engine)) == "append(xs, nil)"
+
+    # Test 37: theorem environment supports non-recursive definitions in scopes
+    scoped_theory.register_definition("double", App("double", x), add(x, x), scope="def_scope")
+    scoped_theory.activate_scope("def_scope")
+    assert str(normalize(App("double", S(zero)), scoped_engine)) == "S(S(0))"
+    try:
+        scoped_theory.register_definition("bad_recursive", App("fdef", x), App("fdef", x), scope="def_scope")
+        assert False
+    except ValueError:
+        pass
+    scoped_theory.deactivate_scope("def_scope")
+
+    # Test 38: non-orientable lemma rewrites are rejected
+    reflexive_clause = Clause((), eq(add(x, y), add(x, y)))
+    ok_refl, refl_cert = prove_checked(reflexive_clause, engine, depth=6)
+    assert ok_refl and refl_cert is not None
+    refl_lemma = Lemma("add_refl", reflexive_clause, refl_cert)
+    scoped_theory.register_lemma(refl_lemma, depth=6, induction_depth=1)
+    try:
+        scoped_theory.register_lemma_rewrite("add_refl", scope="list_scope", orientation="auto")
+        assert False
+    except ValueError:
+        pass
+
+    # Test 39: ProofSession can drive scope activation/deactivation
+    sess3 = ProofSession(Clause((), eq(app(xs, nil), xs)), scoped_engine)
+    sess3.activate_scope("list_scope")
+    sess3.simp()
+    assert sess3.qed()
+    sess3.deactivate_scope("list_scope")
 
     print("\nAppend associativity proof trace:")
     print(rendered)

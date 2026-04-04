@@ -15,11 +15,15 @@ Boyer–Moore style rewriting core with:
 - negation and split
 - congruence closure
 - induction schemes
+- checked proof certificates
+- interactive theorem environment/session
 
 Public API (small, stable surface):
 - term constructors: V, Const, App
 - proving entry points: normalize, prove, prove_with_induction, prove_with_registered_induction
+- checked proving entry points: prove_checked, check_certificate
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
+- theorem environment/session: get_theorem_environment, TheoremEnvironment, ProofSession
 """
 
 from dataclasses import dataclass
@@ -1269,6 +1273,47 @@ def _contains_symbol(term: Term, symbol: str) -> bool:
             return any(_contains_symbol(a, symbol) for a in args)
 
 
+def _select_induction_scheme(
+    engine: Engine,
+    var: Var,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+) -> InductionScheme:
+    chosen = scheme
+    if chosen is None and scheme_name is not None:
+        chosen = get_induction_scheme(engine, scheme_name)
+    if chosen is None and var.sort is not None:
+        chosen = get_induction_scheme_for_sort(engine, var.sort)
+    if chosen is None:
+        raise ValueError("No induction scheme provided and no scheme found for variable sort.")
+    if not var_matches_scheme(var, chosen):
+        raise ValueError(f"Variable {var.name} is incompatible with induction scheme {chosen.name}.")
+    return chosen
+
+
+def _orient_equality_as_rewrite(
+    config: EngineConfig,
+    lhs: Term,
+    rhs: Term,
+    orientation: str,
+) -> Rule:
+    if orientation == "auto":
+        if _decreases(config, lhs, rhs):
+            return Rule(lhs, rhs)
+        if _decreases(config, rhs, lhs):
+            return Rule(rhs, lhs)
+        raise ValueError("Lemma cannot be oriented into a decreasing rewrite rule.")
+    if orientation == "lhs_to_rhs":
+        if not _decreases(config, lhs, rhs):
+            raise ValueError("Requested orientation lhs_to_rhs is not decreasing.")
+        return Rule(lhs, rhs)
+    if orientation == "rhs_to_lhs":
+        if not _decreases(config, rhs, lhs):
+            raise ValueError("Requested orientation rhs_to_lhs is not decreasing.")
+        return Rule(rhs, lhs)
+    raise ValueError(f"Unknown orientation: {orientation}")
+
+
 class TheoremEnvironment:
     def __init__(self, engine: Engine, base_rules: list[Rule]):
         self.engine = engine
@@ -1285,6 +1330,11 @@ class TheoremEnvironment:
             if scope in self.active_scopes:
                 active_rules.extend(rules)
         self.engine.reset_rules(active_rules)
+
+    def _add_rule_to_scope(self, scope: str, rule: Rule):
+        self.scoped_rule_sets.setdefault(scope, []).append(rule)
+        if scope in self.active_scopes:
+            self._sync_engine_rules()
 
     def create_scope(self, name: str):
         self.scoped_rule_sets.setdefault(name, [])
@@ -1323,9 +1373,7 @@ class TheoremEnvironment:
                 raise ValueError("Definition lhs must be a function application.")
         rule = Rule(lhs, rhs)
         self.definitions[name] = rule
-        self.scoped_rule_sets.setdefault(scope, []).append(rule)
-        if scope in self.active_scopes:
-            self._sync_engine_rules()
+        self._add_rule_to_scope(scope, rule)
 
     def register_lemma_rewrite(
         self,
@@ -1341,29 +1389,10 @@ class TheoremEnvironment:
             raise ValueError("Lemma goal must be an equality.")
         lhs, rhs = eq_goal
         assert self.engine.config is not None
-
-        if orientation == "auto":
-            if _decreases(self.engine.config, lhs, rhs):
-                rule = Rule(lhs, rhs)
-            elif _decreases(self.engine.config, rhs, lhs):
-                rule = Rule(rhs, lhs)
-            else:
-                raise ValueError("Lemma cannot be oriented into a decreasing rewrite rule.")
-        elif orientation == "lhs_to_rhs":
-            if not _decreases(self.engine.config, lhs, rhs):
-                raise ValueError("Requested orientation lhs_to_rhs is not decreasing.")
-            rule = Rule(lhs, rhs)
-        elif orientation == "rhs_to_lhs":
-            if not _decreases(self.engine.config, rhs, lhs):
-                raise ValueError("Requested orientation rhs_to_lhs is not decreasing.")
-            rule = Rule(rhs, lhs)
-        else:
-            raise ValueError(f"Unknown orientation: {orientation}")
+        rule = _orient_equality_as_rewrite(self.engine.config, lhs, rhs, orientation)
 
         self.lemma_rewrites[lemma_name] = rule
-        self.scoped_rule_sets.setdefault(scope, []).append(rule)
-        if scope in self.active_scopes:
-            self._sync_engine_rules()
+        self._add_rule_to_scope(scope, rule)
         return rule
 
 
@@ -1372,7 +1401,6 @@ class ProofSession:
         self.engine = engine
         self.goals: list[Clause] = [clause]
         self.theory = get_theorem_environment(engine)
-        self.lemmas = self.theory.lemmas
         self.trace = ProofTrace()
         self._trace_root = _new_node("session", clause, note="interactive")
         self.trace.roots.append(self._trace_root)
@@ -1391,6 +1419,26 @@ class ProofSession:
 
     def _replace_current(self, new_goals: list[Clause]):
         self.goals = new_goals + self.goals[1:]
+
+    def assumptions(self) -> Tuple[Tuple[Term, Term], ...]:
+        goal = self.current_goal()
+        if goal is None:
+            return ()
+        return goal.assumptions
+
+    def keep_assumptions(self, indices: list[int]):
+        goal = self.current_goal()
+        if goal is None:
+            raise ValueError("No goals left.")
+        assumps = list(goal.assumptions)
+        chosen: list[Tuple[Term, Term]] = []
+        for i in indices:
+            if i < 0 or i >= len(assumps):
+                raise ValueError(f"Assumption index out of range: {i}")
+            chosen.append(assumps[i])
+        next_goal = Clause(tuple(chosen), goal.goal)
+        self._record("session-keep-assumptions", goal, note=f"indices={indices}", children=[_new_node("goal", next_goal)])
+        self.goals[0] = next_goal
 
     def simp(self):
         if not self.goals:
@@ -1417,15 +1465,47 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        chosen = scheme
-        if chosen is None and scheme_name is not None:
-            chosen = get_induction_scheme(self.engine, scheme_name)
-        if chosen is None:
-            raise ValueError("No induction scheme provided.")
+        chosen = _select_induction_scheme(self.engine, var, scheme=scheme, scheme_name=scheme_name)
         branches = _check_induction_step(original, var, chosen)
         kids = [_new_node("induction-branch", b, note=f"index={i}") for i, b in enumerate(branches)]
         self._record("session-induct", original, note=f"var={var.name}, scheme={chosen.name}", children=kids)
         self._replace_current(branches)
+
+    def induct_many(
+        self,
+        vars: list[Var],
+        schemes: Optional[list[Optional[InductionScheme]]] = None,
+        scheme_names: Optional[list[Optional[str]]] = None,
+    ):
+        if not self.goals:
+            raise ValueError("No goals left.")
+        if not vars:
+            raise ValueError("induct_many requires at least one variable.")
+        if schemes is not None and len(schemes) != len(vars):
+            raise ValueError("schemes length must match vars length.")
+        if scheme_names is not None and len(scheme_names) != len(vars):
+            raise ValueError("scheme_names length must match vars length.")
+
+        original = self.goals[0]
+        pending = [original]
+        plan: list[tuple[str, str]] = []
+        for i, var in enumerate(vars):
+            chosen = _select_induction_scheme(
+                self.engine,
+                var,
+                scheme=schemes[i] if schemes is not None else None,
+                scheme_name=scheme_names[i] if scheme_names is not None else None,
+            )
+            plan.append((var.name, chosen.name))
+            next_pending: list[Clause] = []
+            for clause in pending:
+                next_pending.extend(_check_induction_step(clause, var, chosen))
+            pending = next_pending
+
+        kids = [_new_node("induction-branch", b, note=f"index={i}") for i, b in enumerate(pending)]
+        note = ", ".join(f"{v}:{s}" for v, s in plan)
+        self._record("session-induct-many", original, note=note, children=kids)
+        self._replace_current(pending)
 
     def rewrite(self, rule: Rule):
         if not self.goals:
@@ -1809,6 +1889,51 @@ if __name__ == "__main__":
     sess3.simp()
     assert sess3.qed()
     sess3.deactivate_scope("list_scope")
+
+    # Test 40: induction can auto-select scheme by variable sort
+    auto_clause = Clause((), eq(add(x_nat, zero), x_nat))
+    sess_auto = ProofSession(auto_clause, engine)
+    sess_auto.induct(x_nat)
+    assert len(sess_auto.goals) == 2
+    sess_auto_fail = ProofSession(clause4, engine)
+    try:
+        sess_auto_fail.induct(x)
+        assert False
+    except ValueError:
+        pass
+
+    # Test 41: multi-variable structural induction expands nested branches
+    y_nat = V("yn", "Nat")
+    multi_clause = Clause((), eq(add(x_nat, y_nat), add(x_nat, y_nat)))
+    sess_multi = ProofSession(multi_clause, engine)
+    sess_multi.induct_many([x_nat, y_nat])
+    assert len(sess_multi.goals) == 4
+
+    # Test 42: tactic layer exposes explicit IH control
+    ys2 = V("ys2", "List")
+    zs2 = V("zs2", "List")
+    assoc_goal2 = Clause((), eq(app(app(xs, ys2), zs2), app(xs, app(ys2, zs2))))
+    sess_ih_keep = ProofSession(assoc_goal2, engine)
+    sess_ih_keep.induct(xs, scheme=list_scheme)
+    sess_ih_keep.simp()  # base branch
+    assert len(sess_ih_keep.assumptions()) >= 1
+    sess_ih_keep.simp()  # step branch, uses IH
+    assert sess_ih_keep.qed()
+
+    sess_ih_drop = ProofSession(assoc_goal2, engine)
+    sess_ih_drop.induct(xs, scheme=list_scheme)
+    sess_ih_drop.simp()  # base branch
+    assert len(sess_ih_drop.assumptions()) >= 1
+    sess_ih_drop.keep_assumptions([])  # drop IH explicitly
+    sess_ih_drop.simp()
+    assert sess_ih_drop.goals and sess_ih_drop.current_goal().goal != true
+
+    # Test 43: induct_many validates list lengths
+    try:
+        sess_multi.induct_many([x_nat, y_nat], schemes=[nat_scheme])
+        assert False
+    except ValueError:
+        pass
 
     print("\nAppend associativity proof trace:")
     print(rendered)

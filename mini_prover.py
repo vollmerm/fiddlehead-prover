@@ -4,21 +4,18 @@ from __future__ import annotations
 mini_prover.py
 ==============
 
-This file is a deliberately imperative, readable prover core.
+A compact first-order prover with rewriting, congruence closure, and induction.
 
-Big ideas:
-1. Represent formulas as simple first-order terms (`Var` and `Fun`).
-2. Normalize goals by repeatedly rewriting terms with oriented equations.
-3. Use context equalities via congruence closure so assumptions can rewrite subterms.
-4. Prove goals by simplify/split recursion, and add induction when rewriting is not enough.
-5. Record proof-structure events in a tree so successful induction proofs can be explained.
-
-Unlike `prover.py`, this version keeps state in globals and does not use interning/caches.
-The goal is to keep algorithm flow explicit and easy to follow.
+The main workflow is:
+1. Build terms with `V`, `Const`, and `App`.
+2. Configure the prover with `configure_prover(...)`.
+3. Normalize terms with `normalize(...)`.
+4. Prove clauses with `prove(...)` or `prove_with_induction(...)`.
+5. Render proof structure with `render_proof_trace(...)` when needed.
 """
 
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple, TypeAlias
 
 
 class Term:
@@ -32,7 +29,7 @@ class Var(Term):
     name: str
     sort: Optional[str] = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
 
@@ -42,7 +39,7 @@ class Fun(Term):
     symbol: str
     args: Tuple[Term, ...]
 
-    def __str__(self):
+    def __str__(self) -> str:
         if not self.args:
             return self.symbol
         return f"{self.symbol}({', '.join(map(str, self.args))})"
@@ -51,22 +48,21 @@ class Fun(Term):
 _VAR_NAME_SORT: Dict[str, Optional[str]] = {}
 
 
-def reset_var_declarations():
+def reset_var_declarations() -> None:
     """Clear global variable-name sort declarations."""
     _VAR_NAME_SORT.clear()
 
 
-def reset_var_interner():
-    """Compatibility alias; this mini prover only resets declared variable sorts."""
+def reset_var_interner() -> None:
+    """Reset declared variable names and sorts."""
     reset_var_declarations()
 
 
 def V(name: str, sort: Optional[str] = None) -> Var:
     """
-    Construct a variable while enforcing consistent sort declarations per name.
+     Construct a variable while enforcing consistent sort declarations per name.
 
-    This keeps one important safety property from the original prover:
-    a variable name cannot silently change sort across the run.
+    Reusing a name with a different sort raises `ValueError`.
     """
     existing_sort = _VAR_NAME_SORT.get(name)
     if existing_sort is None and name in _VAR_NAME_SORT:
@@ -82,12 +78,12 @@ def V(name: str, sort: Optional[str] = None) -> Var:
     return Var(name, sort)
 
 
-def Const(n):
+def Const(n: str) -> Fun:
     """Create an arity-0 function term (a constant)."""
     return Fun(n, ())
 
 
-def App(f, *a):
+def App(f: str, *a: Term) -> Fun:
     """Create a function application term."""
     return Fun(f, a)
 
@@ -97,6 +93,8 @@ false = Const("false")
 
 
 Subst = Dict[Var, Term]
+TermKey: TypeAlias = tuple[int, str, int, tuple["TermKey", ...]] | tuple[int, str]
+RepPriority: TypeAlias = tuple[int, TermKey]
 
 
 def apply_subst(term: Term, subst: Subst) -> Term:
@@ -106,6 +104,7 @@ def apply_subst(term: Term, subst: Subst) -> Term:
             return subst.get(v, v)
         case Fun(f, args):
             return Fun(f, tuple(apply_subst(a, subst) for a in args))
+    raise TypeError(f"Unsupported term: {term!r}")
 
 
 def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optional[Subst]:
@@ -150,7 +149,7 @@ class Rule:
 class RuleIndex:
     """Index rules by top symbol to avoid scanning all rules on every rewrite step."""
 
-    def __init__(self, rules):
+    def __init__(self, rules: Sequence[Rule]) -> None:
         """Build symbol -> rules mapping; variable-lhs rules live under `None`."""
         self.by_symbol: Dict[Optional[str], list[Rule]] = {}
         for r in rules:
@@ -160,13 +159,14 @@ class RuleIndex:
                 case Var():
                     self.by_symbol.setdefault(None, []).append(r)
 
-    def get(self, term: Term):
+    def get(self, term: Term) -> list[Rule]:
         """Return candidate rules for this term's head symbol."""
         match term:
             case Fun(sym, _):
                 return self.by_symbol.get(sym, []) + self.by_symbol.get(None, [])
             case Var():
                 return self.by_symbol.get(None, [])
+        raise TypeError(f"Unsupported term: {term!r}")
 
 
 @dataclass(frozen=True)
@@ -207,7 +207,7 @@ def default_engine_config() -> EngineConfig:
     )
 
 
-def _prec(config: EngineConfig, f: str):
+def _prec(config: EngineConfig, f: str) -> int:
     """Lookup precedence for a symbol (default 0 for unknown symbols)."""
     return config.precedence.get(f, 0)
 
@@ -242,21 +242,22 @@ def _lpo_greater(config: EngineConfig, s: Term, t: Term) -> bool:
     return False
 
 
-def _decreases(config: EngineConfig, a, b):
+def _decreases(config: EngineConfig, a: Term, b: Term) -> bool:
     """Convenience wrapper: true when `a -> b` is a decreasing orientation."""
     return _lpo_greater(config, a, b)
 
 
-def _term_key(t: Term):
+def _term_key(t: Term) -> TermKey:
     """Deterministic structural sort key for terms."""
     match t:
         case Fun(f, args):
             return (0, f, len(args), tuple(_term_key(a) for a in args))
         case Var(n, _):
             return (1, n)
+    raise TypeError(f"Unsupported term: {t!r}")
 
 
-def _rep_priority(t: Term):
+def _rep_priority(t: Term) -> RepPriority:
     """Priority key for choosing class representatives in equality classes."""
     match t:
         case Fun(_, args) if not args:
@@ -265,6 +266,7 @@ def _rep_priority(t: Term):
             return (1, _term_key(t))
         case Fun():
             return (2, _term_key(t))
+    raise TypeError(f"Unsupported term: {t!r}")
 
 
 def _ac_normalize(config: EngineConfig, t: Term) -> Term:
@@ -276,9 +278,9 @@ def _ac_normalize(config: EngineConfig, t: Term) -> Term:
     """
     match t:
         case Fun(f, (a, b)) if f in config.assoc:
-            flat = []
+            flat: list[Term] = []
 
-            def collect(x):
+            def collect(x: Term) -> None:
                 match x:
                     case Fun(f2, (l, r)) if f2 == f:
                         collect(l)
@@ -305,14 +307,14 @@ class EqClasses:
     This allows context equalities to imply equalities under function application.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Create empty equivalence-class structures."""
         self.parent: Dict[Term, Term] = {}
         self.rank: Dict[Term, int] = {}
         self.terms: set[Term] = set()
         self.rep: Dict[Term, Term] = {}
 
-    def _ensure(self, t: Term):
+    def _ensure(self, t: Term) -> None:
         """Ensure a term is present in the union-find structures."""
         if t not in self.parent:
             self.parent[t] = t
@@ -320,7 +322,7 @@ class EqClasses:
             self.terms.add(t)
             self.rep[t] = t
 
-    def _register(self, t: Term):
+    def _register(self, t: Term) -> None:
         """Register a term and recursively register all subterms."""
         self._ensure(t)
         match t:
@@ -356,7 +358,7 @@ class EqClasses:
             self.rep[ra] = self.rep[rb]
         return True
 
-    def close_congruence(self):
+    def close_congruence(self) -> None:
         """Close classes under congruence: equal args imply equal function applications."""
         changed = True
         while changed:
@@ -385,6 +387,7 @@ class EqClasses:
                 self._register(rebuilt)
                 self.close_congruence()
                 return self.rep[self.find(rebuilt)]
+        raise TypeError(f"Unsupported term: {t!r}")
 
     def are_equal(self, a: Term, b: Term) -> bool:
         """Check whether two terms are equal under the current closure."""
@@ -407,7 +410,7 @@ def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqCla
     return eq
 
 
-def _context_rules(ctx: Context, config: EngineConfig):
+def _context_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
     """
     Turn context equalities (including IH assumptions) into oriented rewrite rules.
 
@@ -433,7 +436,7 @@ def _context_rules(ctx: Context, config: EngineConfig):
         yield Rule(oriented_lhs, oriented_rhs)
 
 
-def builtin_rules():
+def builtin_rules() -> list[Rule]:
     """Boolean/equality core rules used by clause simplification and branching."""
     x = V("builtin_x")
     y = V("builtin_y")
@@ -452,6 +455,7 @@ def is_ground(t: Term) -> bool:
             return False
         case Fun(_, args):
             return all(is_ground(a) for a in args)
+    raise TypeError(f"Unsupported term: {t!r}")
 
 
 @dataclass
@@ -465,11 +469,11 @@ class TraceStep:
 class Trace:
     """Container for low-level rewrite-step trace events."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Start with no rewrite events."""
         self.steps: list[TraceStep] = []
 
-    def add(self, b, a, r):
+    def add(self, b: Term, a: Term, r: Rule) -> None:
         """Append one rewrite event."""
         self.steps.append(TraceStep(b, a, r))
 
@@ -504,23 +508,14 @@ class ProofNode:
     kind: str
     clause: Clause
     note: str = ""
-    children: list["ProofNode"] = None
+    children: list["ProofNode"] = field(default_factory=list)
     solved: Optional[bool] = None
-
-    def __post_init__(self):
-        """Ensure children is always a list for easy append-based construction."""
-        if self.children is None:
-            self.children = []
 
 
 @dataclass
 class ProofTrace:
     """Top-level container for proof trees."""
-    roots: list[ProofNode]
-
-    def __init__(self):
-        """Initialize empty list of root proof attempts."""
-        self.roots = []
+    roots: list[ProofNode] = field(default_factory=list)
 
 
 def _new_node(kind: str, clause: Clause, note: str = "") -> ProofNode:
@@ -532,7 +527,7 @@ def render_proof_trace(trace: ProofTrace) -> str:
     """Render a proof tree into a readable indented text outline."""
     lines: list[str] = []
 
-    def visit(node: ProofNode, indent: int):
+    def visit(node: ProofNode, indent: int) -> None:
         pad = "  " * indent
         status = ""
         if node.solved is True:
@@ -549,13 +544,9 @@ def render_proof_trace(trace: ProofTrace) -> str:
     return "\n".join(lines)
 
 
-# -----------------------------------------------------------------------------
-# Global prover state
-# -----------------------------------------------------------------------------
-# This mini prover intentionally keeps algorithm state in globals so call flow is
-# straightforward: configure once, then call normalize/prove helpers directly.
+# Global prover configuration used by `normalize(...)` and the proof-search helpers.
 GLOBAL_RULES: list[Rule] = []
-GLOBAL_RULE_INDEX = RuleIndex([])
+GLOBAL_RULE_INDEX: RuleIndex = RuleIndex([])
 GLOBAL_CONTEXT = Context()
 GLOBAL_TRACE: Optional[Trace] = None
 GLOBAL_FUEL = 1000
@@ -570,11 +561,9 @@ def configure_prover(
     fuel: int = 1000,
     config: Optional[EngineConfig] = None,
     schemes: Optional[Dict[str, InductionScheme]] = None,
-):
+) -> None:
     """
-    Initialize global prover state.
-
-    This is the replacement for creating/configuring an Engine object.
+    Set the global rules, context, tracing, and induction schemes used by the prover.
     """
     global GLOBAL_RULES, GLOBAL_RULE_INDEX, GLOBAL_CONTEXT, GLOBAL_TRACE, GLOBAL_FUEL, GLOBAL_CONFIG, GLOBAL_SCHEMES
     GLOBAL_RULES = list(rules)
@@ -586,8 +575,17 @@ def configure_prover(
     GLOBAL_SCHEMES = schemes if schemes is not None else {}
 
 
-def _holds_with(l: Term, r: Term, rules, rule_index, ctx: Context, trace: Optional[Trace], fuel: int, config: EngineConfig):
-    """Check equality in a specific local configuration (used by rule conditions)."""
+def _holds_with(
+    l: Term,
+    r: Term,
+    rules: Sequence[Rule],
+    rule_index: RuleIndex,
+    ctx: Context,
+    trace: Optional[Trace],
+    fuel: int,
+    config: EngineConfig,
+) -> bool:
+    """Check whether two terms are equal under a supplied local prover configuration."""
     l2 = _normalize_with(l, rules, rule_index, ctx, trace, fuel, config)
     r2 = _normalize_with(r, rules, rule_index, ctx, trace, fuel, config)
     eq = _build_eq_classes(ctx, (l2, r2))
@@ -600,10 +598,10 @@ def _holds_with(l: Term, r: Term, rules, rule_index, ctx: Context, trace: Option
 
 
 def _conditions_hold(
-    conditions,
-    subst,
-    rules,
-    rule_index,
+    conditions: tuple[tuple[Term, Term], ...],
+    subst: Subst,
+    rules: Sequence[Rule],
+    rule_index: RuleIndex,
     ctx: Context,
     trace: Optional[Trace],
     fuel: int,
@@ -621,13 +619,13 @@ def _conditions_hold(
 def _rewrite_once(
     term: Term,
     rule: Rule,
-    rules,
-    rule_index,
+    rules: Sequence[Rule],
+    rule_index: RuleIndex,
     ctx: Context,
     trace: Optional[Trace],
     fuel: int,
     config: EngineConfig,
-):
+) -> Optional[Term]:
     """Try one specific rule on one specific term; return rewritten term or None."""
     subst = match(rule.lhs, term)
     if subst is None:
@@ -644,13 +642,13 @@ def _rewrite_once(
 
 def _rewrite_term(
     term: Term,
-    rules,
-    rule_index,
+    rules: Sequence[Rule],
+    rule_index: RuleIndex,
     ctx: Context,
     trace: Optional[Trace],
     fuel: int,
     config: EngineConfig,
-):
+) -> Term:
     """
     Rewrite one term layer:
     1) canonicalize with context equalities,
@@ -685,13 +683,13 @@ def _rewrite_term(
 
 def _normalize_with(
     term: Term,
-    rules,
-    rule_index,
+    rules: Sequence[Rule],
+    rule_index: RuleIndex,
     ctx: Context,
     trace: Optional[Trace],
     fuel: int,
     config: EngineConfig,
-):
+) -> Term:
     """Repeat `_rewrite_term` to fixpoint (or until fuel is exhausted)."""
     for _ in range(fuel):
         t2 = _rewrite_term(term, rules, rule_index, ctx, trace, fuel, config)
@@ -701,7 +699,7 @@ def _normalize_with(
     return term
 
 
-def normalize(term: Term):
+def normalize(term: Term) -> Term:
     """Public normalization entry point using current global prover configuration."""
     return _normalize_with(term, GLOBAL_RULES, GLOBAL_RULE_INDEX, GLOBAL_CONTEXT, GLOBAL_TRACE, GLOBAL_FUEL, GLOBAL_CONFIG)
 
@@ -728,7 +726,7 @@ def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") ->
     )
 
 
-def register_induction_scheme(scheme: InductionScheme):
+def register_induction_scheme(scheme: InductionScheme) -> None:
     """Register an induction scheme in global scheme registry."""
     GLOBAL_SCHEMES[scheme.name] = scheme
 
@@ -761,6 +759,7 @@ def vars_in_term(term: Term) -> set[str]:
             for a in args:
                 out |= vars_in_term(a)
             return out
+    raise TypeError(f"Unsupported term: {term!r}")
 
 
 def vars_in_clause(clause: Clause) -> set[str]:
@@ -834,7 +833,7 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
     return branches
 
 
-def simplify_clause(clause: Clause):
+def simplify_clause(clause: Clause) -> Clause:
     """Normalize a clause goal under the clause assumptions as local context."""
     local_ctx = Context(clause.assumptions)
     new_goal = _normalize_with(
@@ -872,10 +871,13 @@ def split_clause(clause: Clause) -> list[Clause]:
             return [clause]
 
 
+InductionHandler: TypeAlias = Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
+
+
 def _prove_kernel(
     clause: Clause,
     depth: int,
-    induction_handler=None,
+    induction_handler: Optional[InductionHandler] = None,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
     """
@@ -911,7 +913,7 @@ def _prove_kernel(
         return False
 
     next_depth = depth - 1
-    branch_results = []
+    branch_results: list[bool] = []
     for i, branch in enumerate(branches):
         child = _new_node("branch", branch, note=f"index={i}")
         if proof_node is not None:
@@ -943,7 +945,9 @@ def prove_with_induction(
             proof_node.note = f"sort mismatch for scheme {scheme.name}"
         return False
 
-    def induction_handler(simplified_clause: Clause, current_depth: int, current_node: Optional[ProofNode]):
+    def induction_handler(
+        simplified_clause: Clause, current_depth: int, current_node: Optional[ProofNode]
+    ) -> Optional[bool]:
         if induction_depth <= 0:
             return False
         branches = induction_branches(simplified_clause, var, scheme)
@@ -953,7 +957,7 @@ def prove_with_induction(
         if current_node is not None:
             current_node.children.append(induction_node)
         next_induction = induction_depth - 1
-        branch_results = []
+        branch_results: list[bool] = []
         for i, branch in enumerate(branches):
             child = _new_node("induction-branch", branch, note=f"index={i}")
             induction_node.children.append(child)
@@ -1013,15 +1017,7 @@ def prove_with_trace(
 
 
 if __name__ == "__main__":
-    # -------------------------------------------------------------------------
-    # Narrative test block
-    # -------------------------------------------------------------------------
-    # These checks serve as executable documentation of the prover pipeline:
-    # - rewriting and substitution basics,
-    # - context-aware simplification,
-    # - induction branch generation,
-    # - full induction proofs on lists/nats,
-    # - proof-tree rendering for human-readable explanations.
+    # Example checks for rewriting, simplification, induction, and proof tracing.
     reset_var_declarations()
     x = V("x")
     y = V("y")
@@ -1034,15 +1030,31 @@ if __name__ == "__main__":
     zero = Const("0")
     one = Const("1")
 
-    S = lambda t: App("S", t)
-    add = lambda a, b: App("add", a, b)
+    def S(t: Term) -> Term:
+        return App("S", t)
+
+    def add(a: Term, b: Term) -> Term:
+        return App("add", a, b)
+
     nil = Const("nil")
-    cons = lambda a, b: App("cons", a, b)
-    app = lambda a, b: App("append", a, b)
-    length = lambda a: App("length", a)
-    eq = lambda a, b: App("eq", a, b)
-    neq = lambda a, b: App("neq", a, b)
-    f = lambda a: App("f", a)
+
+    def cons(a: Term, b: Term) -> Term:
+        return App("cons", a, b)
+
+    def app(a: Term, b: Term) -> Term:
+        return App("append", a, b)
+
+    def length(a: Term) -> Term:
+        return App("length", a)
+
+    def eq(a: Term, b: Term) -> Term:
+        return App("eq", a, b)
+
+    def neq(a: Term, b: Term) -> Term:
+        return App("neq", a, b)
+
+    def f(a: Term) -> Term:
+        return App("f", a)
 
     r1 = Rule(add(zero, y), y)
     r2 = Rule(add(S(x), y), S(add(x, y)))
@@ -1059,63 +1071,64 @@ if __name__ == "__main__":
     config = default_engine_config()
     configure_prover(rules=rules, config=config, schemes=schemes)
 
-    # Test 1
+    # Rewriting on natural-number addition.
     term = add(S(S(zero)), S(zero))
     res = normalize(term)
     print("Result:", res)
     assert str(res) == "S(S(S(0)))"
 
-    # Test 2
+    # Structural equality for terms.
     assert App("f", x) == App("f", x)
 
-    # Test 3
+    # Substitution.
     assert str(apply_subst(add(x, y), {x: zero})) == "add(0, y)"
 
-    # Test 4
+    # Pattern matching.
     m = match(add(x, y), add(zero, S(zero)))
+    assert m is not None
     assert m[x] == zero
 
-    # Test 5
+    # AC normalization.
     assert str(normalize(add(y, add(x, z)))) == "add(x, add(y, z))"
 
-    # Test 6
+    # Low-level rewrite tracing.
     tr = Trace()
     configure_prover(rules=rules, trace=tr, config=config, schemes=schemes)
     normalize(add(S(zero), zero))
     assert len(tr.steps) > 0
     configure_prover(rules=rules, config=config, schemes=schemes)
 
-    # Test 7
+    # Clause simplification under assumptions.
     clause = Clause(((x, zero),), add(x, S(zero)))
     simplified = simplify_clause(clause)
     assert str(simplified.goal) == "S(0)"
 
-    # Test 8
+    # Solved equality goals.
     clause2 = Clause((), eq(zero, zero))
     print(simplify_clause(clause2))
     assert clause_solved(simplify_clause(clause2))
 
-    # Test 9
+    # Stable normalization of a ground term.
     assert normalize(add(zero, zero)) == zero
 
-    # Test 10
+    # Repeated normalization yields the same result.
     r1n = normalize(add(zero, zero))
     r2n = normalize(add(zero, zero))
     assert r1n == r2n
 
-    # Test 11
+    # Conditional rewrite rules.
     assert str(normalize(f(zero))) == "1"
     assert str(normalize(f(S(zero)))) == "f(S(0))"
 
-    # Test 12
+    # Built-in equality and disequality simplification.
     assert normalize(eq(zero, zero)) == true
     assert normalize(neq(zero, zero)) == false
 
-    # Test 13: equality closure x = y, y = 0 => x = 0
+    # Equality closure propagates through assumptions.
     clause3 = Clause(((x, y), (y, zero)), eq(x, zero))
     assert clause_solved(simplify_clause(clause3))
 
-    # Test 14: induction obligations for nat produce base + step (with IH)
+    # Natural-number induction produces base and step branches.
     nat_scheme = nat_induction_scheme(zero)
     list_scheme = list_induction_scheme()
     clause4 = Clause((), eq(add(x, zero), x))
@@ -1128,18 +1141,18 @@ if __name__ == "__main__":
     assert str(ih_l) == "add(x_ih_0, 0)"
     assert str(ih_r) == "x_ih_0"
 
-    # Test 15: prove add(x, 0) = x by explicit nat induction
+    # Addition right-identity by explicit natural-number induction.
     assert prove_with_induction(clause4, x, nat_scheme, depth=8, induction_depth=1)
 
-    # Test 16: a clearly false ground goal is not proven
+    # False ground goals remain unproved.
     bad = Clause((), eq(add(zero, one), zero))
     assert not prove(bad, depth=8)
 
-    # Test 17: sort mismatch blocks induction
+    # Sort mismatches block induction.
     assert not prove_with_induction(clause4, xs, nat_scheme, depth=8, induction_depth=1)
     assert not induction_branches(clause4, xs, nat_scheme)
 
-    # Test 18: scheme registry lookup and proof
+    # Registered schemes can be looked up by name or sort.
     register_induction_scheme(nat_scheme)
     register_induction_scheme(list_scheme)
     assert get_induction_scheme("nat") is nat_scheme
@@ -1147,7 +1160,7 @@ if __name__ == "__main__":
     assert prove_with_registered_induction(clause4, x_nat, "nat", depth=8, induction_depth=1)
     assert not prove_with_registered_induction(clause4, x_nat, "list", depth=8, induction_depth=1)
 
-    # Test 19: list induction branch shape
+    # List induction branch shape.
     list_goal = Clause((), eq(app(xs, nil), xs))
     list_branches = induction_branches(list_goal, xs, list_scheme)
     assert len(list_branches) == 2
@@ -1158,31 +1171,31 @@ if __name__ == "__main__":
     assert str(ih_l2) == "append(xs_ih_0, nil)"
     assert str(ih_r2) == "xs_ih_0"
 
-    # Test 20: prove append(xs, nil) = xs by explicit list induction
+    # Append right-identity by explicit list induction.
     assert prove_with_induction(list_goal, xs, list_scheme, depth=10, induction_depth=1)
 
-    # Test 21: prove append associativity by list induction
+    # Append associativity by list induction.
     ys = V("ys", "List")
     zs = V("zs", "List")
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
     assert prove_with_induction(assoc_goal, xs, list_scheme, depth=12, induction_depth=1)
 
-    # Test 22: prove length(append(xs, nil)) = length(xs) by list induction
+    # Length is preserved by appending `nil`.
     len_append_nil_goal = Clause((), eq(length(app(xs, nil)), length(xs)))
     assert prove_with_induction(len_append_nil_goal, xs, list_scheme, depth=12, induction_depth=1)
 
-    # Test 23: prove length(append(xs, ys)) = add(length(xs), length(ys))
+    # Length distributes over append.
     len_append_goal = Clause((), eq(length(app(xs, ys)), add(length(xs), length(ys))))
     assert prove_with_induction(len_append_goal, xs, list_scheme, depth=14, induction_depth=1)
 
-    # Test 24: changing config changes AC behavior deterministically
+    # Configuration controls AC normalization behavior.
     no_ac_config = EngineConfig(precedence=config.precedence, assoc=set(), comm=set())
     configure_prover(rules=rules, config=no_ac_config, schemes=schemes)
     assert str(normalize(add(y, add(x, z)))) == "add(y, add(x, z))"
     configure_prover(rules=rules, config=config, schemes=schemes)
     assert str(normalize(add(y, add(x, z)))) == "add(x, add(y, z))"
 
-    # Test 25: variable declarations are structural, not interned
+    # Variables compare structurally by name and sort.
     vx1 = V("vx")
     vx2 = V("vx")
     assert vx1 == vx2
@@ -1192,7 +1205,7 @@ if __name__ == "__main__":
     assert vn1 == vn2
     assert vn1 is not vn2
 
-    # Test 26: strict same-name sort conflicts raise immediately
+    # Redeclaring a variable name with a different sort raises an error.
     reset_var_declarations()
     _ = V("u")
     try:
@@ -1208,7 +1221,7 @@ if __name__ == "__main__":
     except ValueError:
         pass
 
-    # Re-establish vars used in tests below
+    # Re-establish variables for the proof-trace example.
     reset_var_declarations()
     x = V("x")
     y = V("y")
@@ -1218,7 +1231,7 @@ if __name__ == "__main__":
     zs = V("zs", "List")
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
 
-    # Test 27: proof trace captures induction events and renders nicely
+    # Proof traces record induction structure in a readable form.
     ok_trace, ptrace = prove_with_trace(assoc_goal, depth=12, var=xs, scheme=list_scheme, induction_depth=1)
     assert ok_trace
     rendered = render_proof_trace(ptrace)

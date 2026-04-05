@@ -72,8 +72,8 @@ class RuleIndex:
 def builtin_rules() -> list[Rule]:
     """Return core boolean/equality simplification rules."""
 
-    x = V("x")
-    y = V("y")
+    x = V("builtin_x")
+    y = V("builtin_y")
     return [
         Rule(App("eq", x, x), true),
         Rule(App("neq", x, x), false),

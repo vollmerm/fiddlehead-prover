@@ -23,21 +23,6 @@ The lower-level module path also works:
 ```python
 from fiddlehead.prover import *
 ```
-
-The most useful pieces are:
-
-| API | Purpose |
-| --- | --- |
-| `V`, `Const`, `App` | Build variables, constants, and terms |
-| `Rule`, `builtin_rules` | Define rewrite systems |
-| `make_engine`, `EngineConfig` | Create prover state |
-| `normalize` | Rewrite a term to normal form |
-| `Clause`, `simplify_clause`, `prove` | Work with proof goals |
-| `InductionScheme`, `prove_with_induction` | Prove by structural induction |
-| `SortSignature`, `register_sort_signature`, `infer_sort` | Define and inspect sorts |
-| `nat_theory`, `list_theory`, `install_theory` | Load common theory fragments |
-| `ProofSession` | Drive proofs interactively |
-
 ## Examples
 
 ```python
@@ -99,6 +84,19 @@ Example proof tree output:
     - induction-branch [solved] :: depth=12 -> eq(append(append(nil, ys), zs), append(nil, append(ys, zs)))
       - simplify -> true
     - induction-branch [solved] :: depth=12 -> eq(append(append(cons(xs_cons_arg_0, xs_ih_0), ys), zs), append(cons(xs_cons_arg_0, xs_ih_0), append(ys, zs)))
+      - simplify -> true
+```
+
+Check out the `examples` folder for more:
+
+```text
+$ python ./examples/prove_length_append.py
+- prove [solved] :: depth=14 -> eq(length(append(xs, ys)), add(length(xs), length(ys)))
+  - simplify -> eq(length(append(xs, ys)), add(length(xs), length(ys)))
+  - induction [solved] :: var=xs, scheme=list -> eq(length(append(xs, ys)), add(length(xs), length(ys)))
+    - induction-branch [solved] :: depth=14 -> eq(length(append(nil, ys)), add(length(nil), length(ys)))
+      - simplify -> true
+    - induction-branch [solved] :: depth=14 -> eq(length(append(cons(xs_cons_arg_0, xs_ih_0), ys)), add(length(cons(xs_cons_arg_0, xs_ih_0)), length(ys)))
       - simplify -> true
 ```
 

@@ -154,6 +154,15 @@ def test_trace_clause_and_cache_basics(env):
     assert clause_solved(simplify_clause(clause3, engine))
 
 
+def test_builtin_rules_do_not_claim_common_variable_names():
+    reset_var_interner()
+    builtin_rules()
+    x_nat = V("x", "Nat")
+    y_list = V("y", "List")
+    assert x_nat.sort == "Nat"
+    assert y_list.sort == "List"
+
+
 def test_induction_branches_and_proofs(env):
     add = env["add"]
     app = env["app"]

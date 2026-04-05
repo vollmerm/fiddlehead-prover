@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Interactive proof-session API built on checked proof primitives."""
+
 from typing import Optional, Tuple
 
 from .kernel import Engine, InductionScheme, Rule
@@ -19,6 +21,8 @@ from .trace import ProofNode, ProofTrace, _new_node
 
 
 class ProofSession:
+    """Stateful, tactic-style wrapper around proof goals and traces."""
+
     def __init__(self, clause: Clause, engine: Engine):
         self.engine = engine
         self.goals: list[Clause] = [clause]
@@ -42,6 +46,8 @@ class ProofSession:
         self._trace_root.children.append(node)
 
     def current_goal(self) -> Optional[Clause]:
+        """Return the active goal, or ``None`` when all goals are solved."""
+
         if not self.goals:
             return None
         return self.goals[0]
@@ -50,12 +56,16 @@ class ProofSession:
         self.goals = new_goals + self.goals[1:]
 
     def assumptions(self) -> Tuple[Tuple[Term, Term], ...]:
+        """Return assumptions of the current goal."""
+
         goal = self.current_goal()
         if goal is None:
             return ()
         return goal.assumptions
 
     def keep_assumptions(self, indices: list[int]) -> None:
+        """Retain only selected assumptions on the current goal."""
+
         goal = self.current_goal()
         if goal is None:
             raise ValueError("No goals left.")
@@ -75,6 +85,8 @@ class ProofSession:
         self.goals[0] = next_goal
 
     def simp(self) -> None:
+        """Simplify the current goal and discharge it if it becomes solved."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -99,6 +111,8 @@ class ProofSession:
         self.goals[0] = simplified
 
     def split(self) -> None:
+        """Split the current goal into branch subgoals."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -113,6 +127,8 @@ class ProofSession:
         scheme: Optional[InductionScheme] = None,
         scheme_name: Optional[str] = None,
     ) -> None:
+        """Apply induction to the current goal for a chosen variable/scheme."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -133,6 +149,8 @@ class ProofSession:
         schemes: Optional[list[Optional[InductionScheme]]] = None,
         scheme_names: Optional[list[Optional[str]]] = None,
     ) -> None:
+        """Apply induction sequentially over multiple variables."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         if not vars:
@@ -164,6 +182,8 @@ class ProofSession:
         self._replace_current(pending)
 
     def rewrite(self, rule: Rule) -> None:
+        """Rewrite the current goal once using ``rule``."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -177,6 +197,8 @@ class ProofSession:
         self.goals[0] = rewritten
 
     def exact(self) -> None:
+        """Discharge the current goal when it is directly solved."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -185,9 +207,13 @@ class ProofSession:
         self.goals = self.goals[1:]
 
     def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+        """Register a proved lemma in the session theorem environment."""
+
         self.theory.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
 
     def apply_lemma(self, name: str) -> None:
+        """Add a lemma equality as a new assumption on the current goal."""
+
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
@@ -213,6 +239,8 @@ class ProofSession:
         rhs: Term,
         scope: str = "definitions",
     ) -> None:
+        """Register a non-recursive definition rule in the theorem environment."""
+
         self.theory.register_definition(name, lhs, rhs, scope=scope)
 
     def register_lemma_rewrite(
@@ -221,17 +249,25 @@ class ProofSession:
         scope: str = "lemmas",
         orientation: str = "auto",
     ) -> None:
+        """Register a lemma as an oriented rewrite rule."""
+
         self.theory.register_lemma_rewrite(lemma_name, scope=scope, orientation=orientation)
 
     def activate_scope(self, name: str) -> None:
+        """Activate a theorem scope and sync engine rules."""
+
         self.theory.activate_scope(name)
         self._record("session-activate-scope", self.current_goal() or Clause((), true), note=name)
 
     def deactivate_scope(self, name: str) -> None:
+        """Deactivate a theorem scope and sync engine rules."""
+
         self.theory.deactivate_scope(name)
         self._record("session-deactivate-scope", self.current_goal() or Clause((), true), note=name)
 
     def qed(self) -> bool:
+        """Return whether all goals are discharged."""
+
         done = not self.goals
         current = self.current_goal() or Clause((), true)
         self._record("session-qed", current, solved=done)

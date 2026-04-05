@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Rewriting kernel and engine state for normalization/proof operations.
+
+The kernel owns rewrite rules, context equalities, indexing, congruence
+reasoning, memoization, and induction-scheme registration. Higher-level proof
+modules build on this engine.
+"""
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional, TYPE_CHECKING, Tuple
 
@@ -34,12 +41,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Rule:
+    """A rewrite rule with optional equational side conditions."""
+
     lhs: Term
     rhs: Term
     conditions: Tuple[Tuple[Term, Term], ...] = ()
 
 
 class RuleIndex:
+    """Index rules by lhs head symbol for faster candidate lookup."""
+
     def __init__(self, rules: list[Rule]):
         self.by_symbol: Dict[Optional[str], list[Rule]] = {}
         for rule in rules:
@@ -58,6 +69,8 @@ class RuleIndex:
 
 
 def builtin_rules() -> list[Rule]:
+    """Return core boolean/equality simplification rules."""
+
     x = V("x")
     y = V("y")
     return [
@@ -80,18 +93,24 @@ def builtin_rules() -> list[Rule]:
 
 @dataclass(frozen=True)
 class Context:
+    """Local assumptions used for contextual equality reasoning."""
+
     equalities: Tuple[Tuple[Term, Term], ...] = ()
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
 
 @dataclass(frozen=True)
 class EngineConfig:
+    """Normalization configuration: precedence plus AC operator sets."""
+
     precedence: Dict[str, int]
     assoc: set[str]
     comm: set[str]
 
 
 def default_engine_config() -> EngineConfig:
+    """Construct the default rewriting/ordering configuration."""
+
     return EngineConfig(
         precedence={
             "not": 2,
@@ -165,6 +184,8 @@ def _rep_priority(term: Term) -> tuple[int, tuple[object, ...]]:
 
 
 class EqClasses:
+    """Union-find congruence closure over terms."""
+
     def __init__(self) -> None:
         self.parent: Dict[Term, Term] = {}
         self.rank: Dict[Term, int] = {}
@@ -215,6 +236,7 @@ class EqClasses:
         return True
 
     def close_congruence(self) -> None:
+        # Repeatedly merge terms with equal symbols and equivalent arguments.
         changed = True
         while changed:
             changed = False
@@ -299,6 +321,8 @@ def _ac_normalize(config: EngineConfig, term: Term) -> Term:
 
 
 def is_ground(term: Term) -> bool:
+    """Return ``True`` when ``term`` contains no variables."""
+
     match term:
         case Var():
             return False
@@ -308,6 +332,8 @@ def is_ground(term: Term) -> bool:
 
 @dataclass(frozen=True)
 class InductionConstructor:
+    """Constructor metadata for one induction step."""
+
     symbol: str
     arity: int
     recursive_positions: Tuple[int, ...] = ()
@@ -315,6 +341,8 @@ class InductionConstructor:
 
 @dataclass(frozen=True)
 class InductionScheme:
+    """Named induction scheme for a specific sort."""
+
     name: str
     sort: str
     base_terms: Tuple[Term, ...]
@@ -322,6 +350,8 @@ class InductionScheme:
 
 
 def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") -> InductionScheme:
+    """Build the standard unary natural-number induction scheme."""
+
     if zero is None:
         zero = Const("0")
     return InductionScheme(
@@ -333,6 +363,8 @@ def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") ->
 
 
 def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") -> InductionScheme:
+    """Build the standard list induction scheme."""
+
     return InductionScheme(
         name="list",
         sort="List",
@@ -347,6 +379,8 @@ def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
 
 @dataclass
 class Engine:
+    """Mutable proving engine with rules, caches, and typing/theory state."""
+
     rules: list[Rule]
     ctx: Context = Context()
     trace: Trace | None = None
@@ -376,6 +410,8 @@ class Engine:
             self.eq_classes.close_congruence()
 
     def holds(self, left: Term, right: Term) -> bool:
+        """Check equality under rewriting plus contextual assumptions."""
+
         left = self.normalize(left)
         right = self.normalize(right)
         self._ensure_eq_classes(left)
@@ -397,6 +433,8 @@ class Engine:
         return True
 
     def rewrite_once(self, term: Term, rule: Rule) -> Optional[Term]:
+        """Apply one rule instance at the term root, if possible."""
+
         subst = match(rule.lhs, term)
         if subst is None:
             return None
@@ -410,6 +448,8 @@ class Engine:
         return new_term
 
     def rewrite_term(self, term: Term) -> Term:
+        """Rewrite one normalization step after recursively rewriting children."""
+
         if term in self.memo:
             return self.memo[term]
 
@@ -442,6 +482,8 @@ class Engine:
         return term
 
     def normalize(self, term: Term) -> Term:
+        """Normalize a term to a rewrite fixed point within available fuel."""
+
         original = term
         original_is_ground = is_ground(original)
         self._ensure_eq_classes(term)
@@ -543,6 +585,8 @@ def make_engine(
     sort_signatures: Optional[Dict[str, SortSignature]] = None,
     installed_theories: Optional[Dict[str, str]] = None,
 ) -> Engine:
+    """Construct an ``Engine`` with explicit shared/per-run dependencies."""
+
     cfg = default_engine_config() if config is None else config
     sigs = default_sort_signatures() if sort_signatures is None else dict(sort_signatures)
     return Engine(
@@ -559,24 +603,36 @@ def make_engine(
 
 
 def normalize(term: Term, engine: Engine) -> Term:
+    """Normalize via the provided engine."""
+
     return engine.normalize(term)
 
 
 def register_induction_scheme(engine: Engine, scheme: InductionScheme) -> None:
+    """Register an induction scheme on an engine."""
+
     engine.register_scheme(scheme)
 
 
 def get_induction_scheme(engine: Engine, name: str) -> Optional[InductionScheme]:
+    """Look up a registered induction scheme by name."""
+
     return engine.get_scheme(name)
 
 
 def get_induction_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
+    """Return a registered induction scheme compatible with ``sort``."""
+
     return engine.get_scheme_for_sort(sort)
 
 
 def register_sort_signature(engine: Engine, symbol: str, signature: SortSignature) -> None:
+    """Register a symbol sort signature on an engine."""
+
     engine.register_sort_signature(symbol, signature)
 
 
 def get_sort_signature(engine: Engine, symbol: str) -> Optional[SortSignature]:
+    """Get a symbol sort signature from an engine."""
+
     return engine.get_sort_signature(symbol)

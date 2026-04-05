@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Tracing data structures for rewriting steps and proof trees."""
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -8,12 +10,16 @@ from .syntax import Term
 
 @dataclass
 class TraceStep:
+    """A single rewrite transition."""
+
     before: Term
     after: Term
     rule: object
 
 
 class Trace:
+    """Append-only collection of rewrite transitions."""
+
     def __init__(self) -> None:
         self.steps: list[TraceStep] = []
 
@@ -27,6 +33,8 @@ class ClauseLike(Protocol):
 
 @dataclass
 class ProofNode:
+    """Node in a high-level proof trace tree."""
+
     kind: str
     clause: ClauseLike
     note: str = ""
@@ -40,6 +48,8 @@ class ProofNode:
 
 @dataclass
 class ProofTrace:
+    """Container for one or more proof roots."""
+
     roots: list[ProofNode]
 
     def __init__(self) -> None:
@@ -51,6 +61,8 @@ def _new_node(kind: str, clause: ClauseLike, note: str = "") -> ProofNode:
 
 
 def render_proof_trace(trace: ProofTrace) -> str:
+    """Render a readable tree view of a ``ProofTrace``."""
+
     lines: list[str] = []
 
     def visit(node: ProofNode, indent: int) -> None:

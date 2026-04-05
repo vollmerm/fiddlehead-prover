@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Clause-level proof search, induction branching, and certificates.
+
+This module turns kernel normalization into a small proof procedure that
+simplifies goals, splits conditional branches, optionally performs induction,
+and can produce/check compact proof certificates.
+"""
+
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -21,11 +28,15 @@ from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 @dataclass(frozen=True)
 class Clause:
+    """A goal with equational assumptions."""
+
     assumptions: Tuple[Tuple[Term, Term], ...]
     goal: Term
 
 
 def vars_in_term(term: Term) -> set[str]:
+    """Collect variable names appearing in a term."""
+
     match term:
         case Var(name, _):
             return {name}
@@ -40,6 +51,8 @@ def vars_in_term(term: Term) -> set[str]:
 
 
 def vars_in_clause(clause: Clause) -> set[str]:
+    """Collect variable names appearing in a clause."""
+
     names = vars_in_term(clause.goal)
     for left, right in clause.assumptions:
         names |= vars_in_term(left)
@@ -48,11 +61,15 @@ def vars_in_clause(clause: Clause) -> set[str]:
 
 
 def instantiate_clause(clause: Clause, subst: dict[Var, Term]) -> Clause:
+    """Apply a substitution across assumptions and goal."""
+
     assumptions = tuple((apply_subst(left, subst), apply_subst(right, subst)) for left, right in clause.assumptions)
     return Clause(assumptions, apply_subst(clause.goal, subst))
 
 
 def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
+    """Extract ``(lhs, rhs)`` from an ``eq(lhs, rhs)`` goal."""
+
     match goal:
         case Fun("eq", (left, right)):
             return left, right
@@ -60,6 +77,8 @@ def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
 
 
 def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Var:
+    """Create a fresh variable name not present in ``used_names``."""
+
     counter = 0
     candidate = f"{base}_{counter}"
     while candidate in used_names:
@@ -70,6 +89,8 @@ def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Va
 
 
 def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+    """Generate base and step obligations for an induction application."""
+
     if not var_matches_scheme(var, scheme):
         return []
 
@@ -101,11 +122,15 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
 
 
 def simplify_clause(clause: Clause, engine: Engine) -> Clause:
+    """Simplify assumptions and goal in one pass."""
+
     simplified, _ = simplify_clause_with_stages(clause, engine)
     return simplified
 
 
 def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause, list[tuple[str, Clause]]]:
+    """Simplify a clause and return intermediate stage snapshots."""
+
     stages: list[tuple[str, Clause]] = []
     _validate_clause_sorts(clause, engine, "clause")
 
@@ -177,10 +202,14 @@ def _simplify_assumptions(
 
 
 def clause_solved(clause: Clause) -> bool:
+    """Return whether the clause is discharged (goal is ``true``)."""
+
     return clause.goal == true
 
 
 def split_clause(clause: Clause) -> list[Clause]:
+    """Split ``if`` goals into branch obligations."""
+
     match clause.goal:
         case Fun("if", (cond, then_branch, else_branch)):
             match cond:
@@ -251,6 +280,8 @@ def prove(
     depth: int = 5,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
+    """Attempt proof by simplify/split recursion up to ``depth``."""
+
     return _prove_kernel(clause, engine, depth, proof_node=proof_node)
 
 
@@ -263,6 +294,8 @@ def prove_with_induction(
     induction_depth: int = 1,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
+    """Attempt proof with optional induction when plain recursion stalls."""
+
     if not var_matches_scheme(var, scheme):
         if proof_node is not None:
             proof_node.solved = False
@@ -317,6 +350,8 @@ def prove_with_registered_induction(
     induction_depth: int = 1,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
+    """Run induction proof using a scheme looked up by name."""
+
     scheme = get_induction_scheme(engine, scheme_name)
     if scheme is None:
         if proof_node is not None:
@@ -335,6 +370,8 @@ def prove_with_trace(
     scheme_name: Optional[str] = None,
     induction_depth: int = 1,
 ) -> tuple[bool, ProofTrace]:
+    """Run proof search and return both success flag and trace tree."""
+
     trace = ProofTrace()
     root = _new_node("prove", clause)
     trace.roots.append(root)
@@ -375,6 +412,8 @@ def prove_with_trace(
 
 @dataclass(frozen=True)
 class ProofCertificate:
+    """A checked-proof artifact that records applied proof steps."""
+
     clause: Clause
     simplified: Clause
     step: str
@@ -511,6 +550,8 @@ def prove_checked(
     scheme_name: Optional[str] = None,
     induction_depth: int = 1,
 ) -> tuple[bool, Optional[ProofCertificate]]:
+    """Attempt proof and return a certificate when successful."""
+
     if var is not None and scheme is None and scheme_name is not None:
         scheme = get_induction_scheme(engine, scheme_name)
     if var is not None and scheme is None:
@@ -574,6 +615,8 @@ def check_certificate(
     depth: int = 5,
     induction_depth: int = 1,
 ) -> bool:
+    """Validate a certificate against engine semantics."""
+
     return _check_certificate_node(cert, engine, depth, induction_depth)
 
 
@@ -593,6 +636,8 @@ def _certificate_to_proof_node(cert: ProofCertificate) -> ProofNode:
 
 
 def certificate_to_proof_trace(cert: ProofCertificate) -> ProofTrace:
+    """Convert a certificate tree into a renderable ``ProofTrace``."""
+
     trace = ProofTrace()
     trace.roots.append(_certificate_to_proof_node(cert))
     return trace

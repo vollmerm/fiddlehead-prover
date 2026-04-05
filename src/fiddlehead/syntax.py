@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+"""Core term and substitution syntax used throughout the prover.
+
+The syntax layer defines hash-consed first-order terms and a lightweight type
+term language. It also provides constructors and matching/substitution helpers
+used by rewriting, clause simplification, and proof search.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from weakref import WeakValueDictionary
 
 
 class Term:
+    """Marker base class for prover terms."""
+
     pass
 
 
 class TypeTerm:
+    """Marker base class for sort/type terms."""
+
     pass
 
 
 @dataclass(frozen=True, slots=True)
 class TypeVar(TypeTerm):
+    """A type variable used by sort signatures and inference."""
+
     name: str
 
     def __str__(self) -> str:
@@ -23,6 +36,8 @@ class TypeVar(TypeTerm):
 
 @dataclass(frozen=True, slots=True)
 class TypeConst(TypeTerm):
+    """A concrete type constructor, optionally parameterized."""
+
     name: str
     args: Tuple[TypeTerm, ...] = ()
 
@@ -42,6 +57,8 @@ def _to_type_term(v: object) -> TypeTerm:
 
 @dataclass(frozen=True, slots=True)
 class Var(Term):
+    """A first-order variable, optionally annotated with a sort name."""
+
     name: str
     sort: Optional[str] = None
 
@@ -54,11 +71,22 @@ _VAR_NAME_SORT: Dict[str, Optional[str]] = {}
 
 
 def reset_var_interner() -> None:
+    """Reset global variable interning state.
+
+    Useful in tests to ensure deterministic reuse and sort checks.
+    """
+
     _VAR_INTERN.clear()
     _VAR_NAME_SORT.clear()
 
 
 def V(name: str, sort: Optional[str] = None) -> Var:
+    """Create (or reuse) an interned variable.
+
+    Variables with the same name must use the same sort annotation across a
+    run; conflicting declarations raise ``ValueError``.
+    """
+
     existing_sort = _VAR_NAME_SORT.get(name)
     if existing_sort is None and name in _VAR_NAME_SORT:
         if sort is not None:
@@ -85,6 +113,8 @@ def V(name: str, sort: Optional[str] = None) -> Var:
 
 @dataclass(frozen=True, slots=True)
 class Fun(Term):
+    """A hash-consed function symbol application."""
+
     symbol: str
     args: Tuple[Term, ...]
 
@@ -110,10 +140,14 @@ Fun._cache = WeakValueDictionary()
 
 
 def Const(name: str) -> Fun:
+    """Build a nullary function (constant) term."""
+
     return Fun(name, ())
 
 
 def App(symbol: str, *args: Term) -> Fun:
+    """Build a function application term."""
+
     return Fun(symbol, args)
 
 
@@ -124,6 +158,8 @@ Subst = Dict[Var, Term]
 
 
 def apply_subst(term: Term, subst: Subst) -> Term:
+    """Apply a substitution to a term."""
+
     match term:
         case Var() as v:
             return subst.get(v, v)
@@ -132,6 +168,11 @@ def apply_subst(term: Term, subst: Subst) -> Term:
 
 
 def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optional[Subst]:
+    """First-order pattern matching from ``pattern`` onto ``target``.
+
+    Returns a substitution on success, or ``None`` when matching fails.
+    """
+
     if subst is None:
         subst = {}
 

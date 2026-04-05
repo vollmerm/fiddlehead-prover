@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Sort signatures, type inference, and well-typedness validation.
+
+This module enforces inference-first typing for terms, rewrite rules, and
+clauses. It is shared by kernel/proof/theory code to reject ill-typed inputs
+early and consistently.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Protocol, Tuple
 
@@ -8,6 +15,8 @@ from .syntax import Fun, Term, TypeConst, TypeTerm, TypeVar, Var, _to_type_term
 
 @dataclass(frozen=True)
 class SortSignature:
+    """Type signature for a symbol: argument sorts and result sort."""
+
     arg_sorts: Tuple[TypeTerm, ...]
     result_sort: TypeTerm
 
@@ -21,6 +30,8 @@ class SortSignature:
 
 
 def default_sort_signatures() -> Dict[str, SortSignature]:
+    """Return built-in sort signatures for core symbols."""
+
     a = TypeVar("A")
     return {
         "0": SortSignature((), TypeConst("Nat")),
@@ -184,6 +195,8 @@ def _infer_type_inner(
 
 
 def infer_type(term: Term, engine: EngineLike) -> TypeTerm:
+    """Infer a principal type term for ``term`` under engine signatures."""
+
     subst: Dict[TypeVar, TypeTerm] = {}
     inferred = _infer_type_inner(term, engine, {}, subst, [0])
     return _apply_type_subst(inferred, subst)
@@ -198,6 +211,11 @@ def _contains_type_vars(term: TypeTerm) -> bool:
 
 
 def infer_sort(term: Term, engine: EngineLike) -> str:
+    """Infer a concrete sort name for ``term``.
+
+    Raises when inference remains polymorphic/ambiguous.
+    """
+
     inferred = infer_type(term, engine)
     if _contains_type_vars(inferred):
         raise ValueError(f"Ambiguous inferred type for term {term}: {inferred}.")

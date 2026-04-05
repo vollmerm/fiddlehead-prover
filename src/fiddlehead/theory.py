@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Theory packaging and theorem-environment management.
+
+The theory layer lets callers bundle signatures, rules, lemmas, induction
+schemes, and rewrite settings into installable modules with compatibility
+checks, scoped activation, and rule synchronization.
+"""
+
 import importlib
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
@@ -40,6 +47,8 @@ from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 @dataclass(frozen=True)
 class Lemma:
+    """A named proved clause plus its checked certificate."""
+
     name: str
     clause: Clause
     certificate: ProofCertificate
@@ -47,6 +56,8 @@ class Lemma:
 
 @dataclass(frozen=True)
 class Theory:
+    """An installable package of symbols, rules, lemmas, and settings."""
+
     name: str
     version: str = "0.0.1"
     depends_on: Tuple[str, ...] = ()
@@ -74,6 +85,8 @@ class Theory:
 
 
 def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
+    """Return a standard arithmetic theory over natural numbers."""
+
     x = V("nat_x")
     y = V("nat_y")
     zero = Const("0")
@@ -103,6 +116,8 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
 
 
 def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
+    """Return a standard list-processing theory."""
+
     a = TypeVar("A")
     head = V("list_xh")
     tail = V("list_xt", "List")
@@ -137,6 +152,8 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
 
 
 def theory_from_module(module) -> Theory:
+    """Load ``THEORY`` from a Python module object."""
+
     theory = getattr(module, "THEORY", None)
     if not isinstance(theory, Theory):
         raise ValueError("Theory module must export THEORY: Theory.")
@@ -144,10 +161,14 @@ def theory_from_module(module) -> Theory:
 
 
 def load_theory_module(module_name: str) -> Theory:
+    """Import a module by name and return its exported ``THEORY`` value."""
+
     return theory_from_module(importlib.import_module(module_name))
 
 
 def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
+    """Get or create the theorem environment attached to an engine."""
+
     if engine.theory is None:
         engine.theory = TheoremEnvironment(engine, engine.rules)
     return engine.theory
@@ -338,6 +359,8 @@ def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) 
 
 
 def install_theory(engine: Engine, theory: Theory, activate_scopes: bool = True) -> Tuple[str, ...]:
+    """Install a theory with conflict preflight, then mutate the real engine."""
+
     preflight = _clone_engine_for_theory_preflight(engine)
     _install_theory_impl(preflight, theory, activate_scopes=activate_scopes)
     return _install_theory_impl(engine, theory, activate_scopes=activate_scopes)
@@ -397,6 +420,8 @@ def _orient_equality_as_rewrite(
 
 
 class TheoremEnvironment:
+    """Manages scoped rules, definitions, and lemmas for one engine."""
+
     def __init__(self, engine: Engine, base_rules: list[Rule]):
         self.engine = engine
         self.base_rules: list[Rule] = list(base_rules)
@@ -407,6 +432,7 @@ class TheoremEnvironment:
         self.active_scopes: set[str] = set()
 
     def _sync_engine_rules(self) -> None:
+        # Rebuild active rules from base + active scopes to keep engine/index coherent.
         active_rules = list(self.base_rules)
         for scope, rules in self.scoped_rule_sets.items():
             if scope in self.active_scopes:
@@ -419,19 +445,27 @@ class TheoremEnvironment:
             self._sync_engine_rules()
 
     def create_scope(self, name: str) -> None:
+        """Create an empty named scope if needed."""
+
         self.scoped_rule_sets.setdefault(name, [])
 
     def activate_scope(self, name: str) -> None:
+        """Activate a scope and resynchronize engine rules."""
+
         if name not in self.scoped_rule_sets:
             raise ValueError(f"Unknown scope: {name}")
         self.active_scopes.add(name)
         self._sync_engine_rules()
 
     def deactivate_scope(self, name: str) -> None:
+        """Deactivate a scope and resynchronize engine rules."""
+
         self.active_scopes.discard(name)
         self._sync_engine_rules()
 
     def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+        """Validate and store a proved lemma."""
+
         if lemma.clause.assumptions:
             raise ValueError(
                 "Only assumption-free lemmas can be registered in this minimal environment."
@@ -456,6 +490,8 @@ class TheoremEnvironment:
         scope: str = "theories",
         label: str = "theory rule",
     ) -> None:
+        """Validate and register a rule into a scope."""
+
         _validate_rule_sorts(rule, self.engine, label)
         self._add_rule_to_scope(scope, rule)
 
@@ -466,6 +502,8 @@ class TheoremEnvironment:
         rhs: Term,
         scope: str = "definitions",
     ) -> None:
+        """Register a non-recursive definition as a scoped rewrite rule."""
+
         match lhs:
             case Fun(symbol, _):
                 pass
@@ -487,6 +525,8 @@ class TheoremEnvironment:
         scope: str = "lemmas",
         orientation: str = "auto",
     ) -> Rule:
+        """Orient and register a lemma equality as a rewrite rule."""
+
         lemma = self.lemmas.get(lemma_name)
         if lemma is None:
             raise ValueError(f"Unknown lemma: {lemma_name}")
@@ -499,4 +539,3 @@ class TheoremEnvironment:
         self.lemma_rewrites[lemma_name] = rule
         self._add_rule_to_scope(scope, rule)
         return rule
-

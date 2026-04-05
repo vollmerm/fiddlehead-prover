@@ -26,7 +26,7 @@ Public API (small, stable surface):
 - checked proving entry points: prove_checked, check_certificate
 - typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
-- theory + theorem environment/session: Theory, load_theory_module, install_theory, get_theorem_environment, TheoremEnvironment, ProofSession
+- theory + theorem environment/session: Theory, nat_theory, list_theory, load_theory_module, install_theory, get_theorem_environment, TheoremEnvironment, ProofSession
 """
 
 import importlib
@@ -54,6 +54,8 @@ __all__ = [
     "InductionScheme",
     "nat_induction_scheme",
     "list_induction_scheme",
+    "nat_theory",
+    "list_theory",
     "register_induction_scheme",
     "get_induction_scheme",
     "get_induction_scheme_for_sort",
@@ -363,26 +365,20 @@ class EngineConfig:
 def default_engine_config() -> EngineConfig:
     return EngineConfig(
         precedence={
-            "mul": 4,
-            "add": 3,
-            "append": 3,
-            "length": 3,
             "not": 2,
             "and": 2,
             "or": 2,
             "S": 2,
-            "cons": 2,
             "if": 1,
             "eq": 1,
             "neq": 1,
             "0": 0,
             "1": 0,
-            "nil": 0,
             "true": 0,
             "false": 0,
         },
-        assoc={"add"},
-        comm={"add"},
+        assoc=set(),
+        comm=set(),
     )
 
 
@@ -407,12 +403,6 @@ def default_sort_signatures() -> Dict[str, SortSignature]:
         "and": SortSignature((TypeConst("Bool"), TypeConst("Bool")), TypeConst("Bool")),
         "or": SortSignature((TypeConst("Bool"), TypeConst("Bool")), TypeConst("Bool")),
         "S": SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
-        "mul": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
-        "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
-        "nil": SortSignature((), TypeConst("List", (A,))),
-        "cons": SortSignature((A, TypeConst("List", (A,))), TypeConst("List", (A,))),
-        "append": SortSignature((TypeConst("List", (A,)), TypeConst("List", (A,))), TypeConst("List", (A,))),
-        "length": SortSignature((TypeConst("List", (A,)),), TypeConst("Nat")),
         "eq": SortSignature((A, A), TypeConst("Bool")),
         "neq": SortSignature((A, A), TypeConst("Bool")),
         "if": SortSignature((TypeConst("Bool"), A, A), A),
@@ -1194,6 +1184,27 @@ def _check_theory_install_conflicts(engine: Engine, env: "TheoremEnvironment", t
                 f"existing signature {existing} vs {signature}."
             )
 
+    assert engine.config is not None
+    for symbol, rank in theory.precedence.items():
+        existing_rank = engine.config.precedence.get(symbol)
+        if existing_rank is not None and existing_rank != rank:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on precedence for {symbol}: "
+                f"existing {existing_rank} vs {rank}."
+            )
+
+    for symbol in theory.assoc:
+        if symbol in engine.config.comm and symbol not in engine.config.assoc:
+            raise ValueError(
+                f"Theory {theory.name} requests associativity for {symbol} but engine marks it non-associative."
+            )
+
+    for symbol in theory.comm:
+        if symbol in engine.config.comm and symbol not in engine.config.assoc:
+            raise ValueError(
+                f"Theory {theory.name} requests commutativity for non-associative symbol {symbol}."
+            )
+
     for lemma in theory.lemmas:
         existing = env.lemmas.get(lemma.name)
         if existing is not None and existing != lemma:
@@ -1264,6 +1275,11 @@ def _install_theory_impl(engine: Engine, theory: "Theory", activate_scopes: bool
 
     for symbol in sorted(theory.sort_signatures):
         register_sort_signature(engine, symbol, theory.sort_signatures[symbol])
+
+    assert engine.config is not None
+    engine.config.precedence.update(theory.precedence)
+    engine.config.assoc.update(theory.assoc)
+    engine.config.comm.update(theory.comm)
 
     for scheme in sorted(theory.schemes, key=lambda s: s.name):
         register_induction_scheme(engine, scheme)
@@ -1843,6 +1859,9 @@ class Theory:
     definitions: Dict[str, Rule] = field(default_factory=dict)
     lemmas: Tuple[Lemma, ...] = ()
     schemes: Tuple[InductionScheme, ...] = ()
+    precedence: Dict[str, int] = field(default_factory=dict)
+    assoc: Tuple[str, ...] = ()
+    comm: Tuple[str, ...] = ()
     default_scopes: Tuple[str, ...] = ()
 
     def __post_init__(self):
@@ -1852,7 +1871,73 @@ class Theory:
         object.__setattr__(self, "definitions", dict(self.definitions))
         object.__setattr__(self, "lemmas", tuple(self.lemmas))
         object.__setattr__(self, "schemes", tuple(self.schemes))
+        object.__setattr__(self, "precedence", dict(self.precedence))
+        object.__setattr__(self, "assoc", tuple(self.assoc))
+        object.__setattr__(self, "comm", tuple(self.comm))
         object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
+
+
+def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
+    x = V("nat_x")
+    y = V("nat_y")
+    zero = Const("0")
+    S = lambda t: App("S", t)
+    add = lambda a, b: App("add", a, b)
+    mul = lambda a, b: App("mul", a, b)
+    return Theory(
+        name=name,
+        version=version,
+        sort_signatures={
+            "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+            "mul": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+        },
+        rules=(
+            Rule(add(zero, y), y),
+            Rule(add(S(x), y), S(add(x, y))),
+            Rule(add(x, zero), x),
+            Rule(add(x, S(y)), S(add(x, y))),
+            Rule(mul(zero, y), zero),
+            Rule(mul(S(x), y), add(y, mul(x, y))),
+        ),
+        schemes=(nat_induction_scheme(zero),),
+        precedence={"mul": 4, "add": 3},
+        assoc=("add",),
+        comm=("add",),
+    )
+
+
+def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
+    A = TypeVar("A")
+    xh = V("list_xh")
+    xt = V("list_xt", "List")
+    xxs = V("list_xs", "List")
+    nil = Const("nil")
+    cons = lambda a, b: App("cons", a, b)
+    app = lambda a, b: App("append", a, b)
+    length = lambda a: App("length", a)
+    zero = Const("0")
+    S = lambda t: App("S", t)
+    return Theory(
+        name=name,
+        version=version,
+        sort_signatures={
+            "nil": SortSignature((), TypeConst("List", (A,))),
+            "cons": SortSignature((A, TypeConst("List", (A,))), TypeConst("List", (A,))),
+            "append": SortSignature(
+                (TypeConst("List", (A,)), TypeConst("List", (A,))),
+                TypeConst("List", (A,)),
+            ),
+            "length": SortSignature((TypeConst("List", (A,)),), TypeConst("Nat")),
+        },
+        rules=(
+            Rule(app(nil, xxs), xxs),
+            Rule(app(cons(xh, xt), xxs), cons(xh, app(xt, xxs))),
+            Rule(length(nil), zero),
+            Rule(length(cons(xh, xt)), S(length(xt))),
+        ),
+        schemes=(list_induction_scheme(),),
+        precedence={"append": 3, "length": 3, "cons": 2},
+    )
 
 
 def theory_from_module(module) -> Theory:
@@ -2184,8 +2269,6 @@ if __name__ == "__main__":
     z = V("z")
     x_nat = V("xn", "Nat")
     xs = V("xs", "List")
-    h = V("h")
-    t = V("t")
 
     zero = Const("0")
     one = Const("1")
@@ -2203,22 +2286,10 @@ if __name__ == "__main__":
     eq = lambda a, b: App("eq", a, b)
     neq = lambda a,b:App("neq",a,b)
     f = lambda a: App("f", a)
-    ite = lambda c,t,e:App("if",c,t,e)
 
-    r1 = Rule(add(zero, y), y)
-    r2 = Rule(add(S(x), y), S(add(x, y)))
     r3 = Rule(f(x), one, conditions=((x, zero),))
 
-    r4 = Rule(app(nil, xs), xs)
-    r5 = Rule(app(cons(h, t), xs), cons(h, app(t, xs)))
-    r6 = Rule(length(nil), zero)
-    r7 = Rule(length(cons(h, t)), S(length(t)))
-    r8 = Rule(add(x, zero), x)
-    r9 = Rule(add(x, S(y)), S(add(x, y)))
-    r10 = Rule(mul(zero, y), zero)
-    r11 = Rule(mul(S(x), y), add(y, mul(x, y)))
-
-    rules = builtin_rules() + [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11]
+    rules = builtin_rules() + [r3]
     shared_cache: Dict[Term, Term] = {}
     shared_schemes: Dict[str, InductionScheme] = {}
     shared_sort_signatures = default_sort_signatures()
@@ -2231,6 +2302,8 @@ if __name__ == "__main__":
         schemes=shared_schemes,
         sort_signatures=shared_sort_signatures,
     )
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, list_theory(), activate_scopes=True)
 
     # Test 1
     t = add(S(S(zero)), S(zero))
@@ -2261,6 +2334,7 @@ if __name__ == "__main__":
         schemes=shared_schemes,
         sort_signatures=shared_sort_signatures,
     )
+    install_theory(tr_engine, nat_theory(), activate_scopes=True)
     normalize(add(S(zero), zero), tr_engine)
     assert len(tr.steps) > 0
 
@@ -2299,8 +2373,10 @@ if __name__ == "__main__":
     assert clause_solved(simplify_clause(clause3, engine))
 
     # Test 14: induction obligations for nat produce base + step (with IH)
-    nat_scheme = nat_induction_scheme(zero)
-    list_scheme = list_induction_scheme()
+    nat_scheme = get_induction_scheme(engine, "nat")
+    assert nat_scheme is not None
+    list_scheme = get_induction_scheme(engine, "list")
+    assert list_scheme is not None
     bool_scheme = InductionScheme(name="bool", sort="Bool", base_terms=(true, false), constructors=())
     clause4 = Clause((), eq(add(x, zero), x))
     branches = induction_branches(clause4, x, nat_scheme)
@@ -2324,8 +2400,6 @@ if __name__ == "__main__":
     assert not induction_branches(clause4, xs, nat_scheme)
 
     # Test 18: scheme registry lookup and proof
-    register_induction_scheme(engine, nat_scheme)
-    register_induction_scheme(engine, list_scheme)
     register_induction_scheme(engine, bool_scheme)
     assert get_induction_scheme(engine, "nat") is nat_scheme
     assert get_induction_scheme_for_sort(engine, "List") is list_scheme
@@ -2444,8 +2518,6 @@ if __name__ == "__main__":
     z = V("z")
     x_nat = V("xn", "Nat")
     xs = V("xs", "List")
-    h = V("h")
-    t = V("t")
 
     # Test 29: proof trace captures induction events and renders nicely
     ok_trace, ptrace = prove_with_trace(assoc_goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1)
@@ -2505,11 +2577,13 @@ if __name__ == "__main__":
     assert "session-exact" in sess_trace_rendered
 
     # Test 36: theorem environment supports scoped lemma rewrites
-    scoped_rules = builtin_rules() + [r1, r2, r4, r5]
+    scoped_rules = builtin_rules()
     scoped_engine = make_engine(rules=scoped_rules, config=shared_config, ground_cache={}, schemes={})
+    install_theory(scoped_engine, nat_theory(), activate_scopes=True)
+    install_theory(scoped_engine, list_theory(), activate_scopes=True)
     scoped_theory = get_theorem_environment(scoped_engine)
-    scoped_list = list_induction_scheme()
-    register_induction_scheme(scoped_engine, scoped_list)
+    scoped_list = get_induction_scheme(scoped_engine, "list")
+    assert scoped_list is not None
     scoped_clause = Clause((), eq(app(xs, nil), xs))
     ok_scoped_cert, scoped_cert = prove_checked(
         scoped_clause, scoped_engine, depth=10, var=xs, scheme=scoped_list, induction_depth=1
@@ -2684,9 +2758,11 @@ if __name__ == "__main__":
         pass
 
     # Test 53: install_theory is engine-scoped and respects activation flag
-    install_rules = builtin_rules() + [r1, r2]
+    install_rules = builtin_rules()
     install_engine_a = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
     install_engine_b = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    install_theory(install_engine_a, nat_theory(), activate_scopes=True)
+    install_theory(install_engine_b, nat_theory(), activate_scopes=True)
     install_theory_payload = Theory(
         name="toy.install",
         sort_signatures={"double": SortSignature(("Nat",), "Nat")},
@@ -2705,6 +2781,7 @@ if __name__ == "__main__":
 
     # Test 54: dependency and conflict checks reject unsafe theory installs
     install_engine_c = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    install_theory(install_engine_c, nat_theory(), activate_scopes=True)
     dep_only = Theory(name="toy.dep-only", depends_on=("core.arith>=1.0.0",))
     try:
         install_theory(install_engine_c, dep_only)
@@ -2745,6 +2822,7 @@ if __name__ == "__main__":
 
     # Test 55: theory install is atomic on validation failure
     install_engine_d = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    install_theory(install_engine_d, nat_theory(), activate_scopes=True)
     bad_atomic = Theory(
         name="bad.atomic",
         sort_signatures={"double": SortSignature(("Nat",), "Nat")},
@@ -2784,6 +2862,24 @@ if __name__ == "__main__":
     y_bool = V("yb", "Bool")
     demorgan_goal = Clause((), eq(bnot(band(x_bool, y_bool)), bor(bnot(x_bool), bnot(y_bool))))
     assert prove_with_registered_induction(demorgan_goal, engine, x_bool, "bool", depth=12, induction_depth=1)
+
+    # Test 60: theory-owned operators stay out of core defaults
+    core_config = default_engine_config()
+    for sym in ("add", "mul", "nil", "cons", "append", "length"):
+        assert sym not in core_config.precedence
+        assert sym not in core_config.assoc
+        assert sym not in core_config.comm
+    core_sigs = default_sort_signatures()
+    for sym in ("add", "mul", "nil", "cons", "append", "length"):
+        assert sym not in core_sigs
+    nat_core = nat_theory()
+    assert nat_core.precedence["add"] == 3
+    assert nat_core.precedence["mul"] == 4
+    assert "add" in nat_core.assoc and "add" in nat_core.comm
+    list_core = list_theory()
+    assert list_core.precedence["cons"] == 2
+    assert list_core.precedence["append"] == 3
+    assert list_core.precedence["length"] == 3
 
     print("\nAppend associativity proof trace:")
     print(rendered)

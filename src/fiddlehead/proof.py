@@ -8,7 +8,7 @@ and can produce/check compact proof certificates.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from .kernel import (
     Context,
@@ -45,9 +45,7 @@ def vars_in_term(term: Term) -> set[str]:
             for arg in term.args:
                 names |= vars_in_term(arg)
             return names
-        case _:
-            names: set[str] = set()
-            return names
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def vars_in_clause(clause: Clause) -> set[str]:
@@ -231,7 +229,7 @@ def _prove_kernel(
     clause: Clause,
     engine: Engine,
     depth: int,
-    induction_handler=None,
+    induction_handler: Optional[Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]] = None,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
     if proof_node is not None:

@@ -8,7 +8,7 @@ modules build on this engine.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, TYPE_CHECKING, Tuple
+from typing import Dict, Iterator, Optional, TYPE_CHECKING, Tuple
 
 from .syntax import (
     App,
@@ -66,6 +66,7 @@ class RuleIndex:
                 return self.by_symbol.get(symbol, []) + self.by_symbol.get(None, [])
             case Var():
                 return self.by_symbol.get(None, [])
+        raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def builtin_rules() -> list[Rule]:
@@ -171,6 +172,7 @@ def _term_key(term: Term) -> tuple[object, ...]:
             return (0, symbol, len(args), tuple(_term_key(arg) for arg in args))
         case Var(name):
             return (1, name)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def _rep_priority(term: Term) -> tuple[int, tuple[object, ...]]:
@@ -181,6 +183,7 @@ def _rep_priority(term: Term) -> tuple[int, tuple[object, ...]]:
             return (1, _term_key(term))
         case Fun():
             return (2, _term_key(term))
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 class EqClasses:
@@ -263,6 +266,7 @@ class EqClasses:
                 self._register(rebuilt)
                 self.close_congruence()
                 return self.rep[self.find(rebuilt)]
+        raise TypeError(f"Unsupported term type: {type(term)!r}")
 
     def are_equal(self, left: Term, right: Term) -> bool:
         return self.canonical(left) is self.canonical(right)
@@ -283,7 +287,7 @@ def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqCla
     return eq_classes
 
 
-def _context_rules(ctx: Context, config: EngineConfig):
+def _context_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
     for lhs, rhs in ctx.equalities:
         if _decreases(config, lhs, rhs):
             yield Rule(lhs, rhs)
@@ -328,6 +332,7 @@ def is_ground(term: Term) -> bool:
             return False
         case Fun(_, args):
             return all(is_ground(arg) for arg in args)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 @dataclass(frozen=True)
@@ -636,3 +641,41 @@ def get_sort_signature(engine: Engine, symbol: str) -> Optional[SortSignature]:
     """Get a symbol sort signature from an engine."""
 
     return engine.get_sort_signature(symbol)
+
+
+__all__ = [
+    "Term",
+    "TypeTerm",
+    "TypeVar",
+    "TypeConst",
+    "Var",
+    "Fun",
+    "V",
+    "Const",
+    "App",
+    "true",
+    "false",
+    "match",
+    "apply_subst",
+    "Rule",
+    "Context",
+    "EngineConfig",
+    "Engine",
+    "InductionConstructor",
+    "InductionScheme",
+    "builtin_rules",
+    "default_engine_config",
+    "default_sort_signatures",
+    "infer_type",
+    "infer_sort",
+    "nat_induction_scheme",
+    "list_induction_scheme",
+    "make_engine",
+    "normalize",
+    "register_induction_scheme",
+    "get_induction_scheme",
+    "get_induction_scheme_for_sort",
+    "register_sort_signature",
+    "get_sort_signature",
+    "SortSignature",
+]

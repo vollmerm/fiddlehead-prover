@@ -9,6 +9,7 @@ checks, scoped activation, and rule synchronization.
 
 import importlib
 from dataclasses import dataclass, field
+from types import ModuleType
 from typing import Dict, Optional, Tuple
 
 from .kernel import (
@@ -90,9 +91,14 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
     x = V("nat_x")
     y = V("nat_y")
     zero = Const("0")
-    succ = lambda term: App("S", term)
-    add = lambda left, right: App("add", left, right)
-    mul = lambda left, right: App("mul", left, right)
+    def succ(term: Term) -> Term:
+        return App("S", term)
+
+    def add(left: Term, right: Term) -> Term:
+        return App("add", left, right)
+
+    def mul(left: Term, right: Term) -> Term:
+        return App("mul", left, right)
     return Theory(
         name=name,
         version=version,
@@ -123,11 +129,19 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     tail = V("list_xt", "List")
     xs = V("list_xs", "List")
     nil = Const("nil")
-    cons = lambda left, right: App("cons", left, right)
-    append = lambda left, right: App("append", left, right)
-    length = lambda term: App("length", term)
+    def cons(left: Term, right: Term) -> Term:
+        return App("cons", left, right)
+
+    def append(left: Term, right: Term) -> Term:
+        return App("append", left, right)
+
+    def length(term: Term) -> Term:
+        return App("length", term)
+
     zero = Const("0")
-    succ = lambda term: App("S", term)
+
+    def succ(term: Term) -> Term:
+        return App("S", term)
     return Theory(
         name=name,
         version=version,
@@ -151,7 +165,7 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     )
 
 
-def theory_from_module(module) -> Theory:
+def theory_from_module(module: ModuleType) -> Theory:
     """Load ``THEORY`` from a Python module object."""
 
     theory = getattr(module, "THEORY", None)
@@ -231,11 +245,11 @@ def _check_theory_install_conflicts(
             )
 
     for symbol, signature in theory.sort_signatures.items():
-        existing = engine.get_sort_signature(symbol)
-        if existing is not None and existing != signature:
+        existing_signature = engine.get_sort_signature(symbol)
+        if existing_signature is not None and existing_signature != signature:
             raise ValueError(
                 f"Theory {theory.name} conflicts on symbol {symbol}: existing signature "
-                f"{existing} vs {signature}."
+                f"{existing_signature} vs {signature}."
             )
 
     for symbol, rank in theory.precedence.items():
@@ -261,13 +275,13 @@ def _check_theory_install_conflicts(
             )
 
     for lemma in theory.lemmas:
-        existing = env.lemmas.get(lemma.name)
-        if existing is not None and existing != lemma:
+        existing_lemma = env.lemmas.get(lemma.name)
+        if existing_lemma is not None and existing_lemma != lemma:
             raise ValueError(f"Theory {theory.name} conflicts on lemma name: {lemma.name}.")
 
     for definition_name, definition in theory.definitions.items():
-        existing = env.definitions.get(definition_name)
-        if existing is not None and existing != definition:
+        existing_definition = env.definitions.get(definition_name)
+        if existing_definition is not None and existing_definition != definition:
             raise ValueError(
                 f"Theory {theory.name} conflicts on definition name: {definition_name}."
             )
@@ -374,6 +388,7 @@ def _contains_symbol(term: Term, symbol: str) -> bool:
             if sym == symbol:
                 return True
             return any(_contains_symbol(arg, symbol) for arg in term.args)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def _select_induction_scheme(

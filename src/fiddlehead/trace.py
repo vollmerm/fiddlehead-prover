@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Tracing data structures for rewriting steps and proof trees."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from .syntax import Term
@@ -28,7 +28,8 @@ class Trace:
 
 
 class ClauseLike(Protocol):
-    goal: Term
+    @property
+    def goal(self) -> Term: ...
 
 
 @dataclass
@@ -38,12 +39,8 @@ class ProofNode:
     kind: str
     clause: ClauseLike
     note: str = ""
-    children: list["ProofNode"] | None = None
+    children: list["ProofNode"] = field(default_factory=list)
     solved: bool | None = None
-
-    def __post_init__(self) -> None:
-        if self.children is None:
-            self.children = []
 
 
 @dataclass
@@ -57,7 +54,7 @@ class ProofTrace:
 
 
 def _new_node(kind: str, clause: ClauseLike, note: str = "") -> ProofNode:
-    return ProofNode(kind=kind, clause=clause, note=note, children=[])
+    return ProofNode(kind=kind, clause=clause, note=note)
 
 
 def render_proof_trace(trace: ProofTrace) -> str:

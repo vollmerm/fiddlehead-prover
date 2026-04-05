@@ -8,7 +8,7 @@ used by rewriting, clause simplification, and proof search.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import ClassVar, Dict, Optional, Tuple
 from weakref import WeakValueDictionary
 
 
@@ -117,6 +117,9 @@ class Fun(Term):
 
     symbol: str
     args: Tuple[Term, ...]
+    _cache: ClassVar[WeakValueDictionary[tuple[str, tuple[Term, ...]], "Fun"]] = (
+        WeakValueDictionary()
+    )
 
     def __new__(cls, symbol: str, args: Tuple[Term, ...]) -> Fun:
         key = (symbol, args)
@@ -134,9 +137,6 @@ class Fun(Term):
         if not self.args:
             return self.symbol
         return f"{self.symbol}({', '.join(map(str, self.args))})"
-
-
-Fun._cache = WeakValueDictionary()
 
 
 def Const(name: str) -> Fun:
@@ -165,6 +165,7 @@ def apply_subst(term: Term, subst: Subst) -> Term:
             return subst.get(v, v)
         case Fun(symbol, args):
             return Fun(symbol, tuple(apply_subst(arg, subst) for arg in args))
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optional[Subst]:

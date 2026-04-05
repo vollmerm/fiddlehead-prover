@@ -53,14 +53,22 @@ class EngineLike(Protocol):
 
 
 class RuleLike(Protocol):
-    lhs: Term
-    rhs: Term
-    conditions: Tuple[Tuple[Term, Term], ...]
+    @property
+    def lhs(self) -> Term: ...
+
+    @property
+    def rhs(self) -> Term: ...
+
+    @property
+    def conditions(self) -> Tuple[Tuple[Term, Term], ...]: ...
 
 
 class ClauseLike(Protocol):
-    assumptions: Tuple[Tuple[Term, Term], ...]
-    goal: Term
+    @property
+    def assumptions(self) -> Tuple[Tuple[Term, Term], ...]: ...
+
+    @property
+    def goal(self) -> Term: ...
 
 
 def _apply_type_subst(term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> TypeTerm:
@@ -75,6 +83,7 @@ def _apply_type_subst(term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> TypeTer
             if not args:
                 return term
             return TypeConst(name, tuple(_apply_type_subst(arg, subst) for arg in args))
+    raise TypeError(f"Unsupported type term: {type(term)!r}")
 
 
 def _occurs_in_type(type_var: TypeVar, term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> bool:
@@ -84,6 +93,7 @@ def _occurs_in_type(type_var: TypeVar, term: TypeTerm, subst: Dict[TypeVar, Type
             return other == type_var
         case TypeConst(_, args):
             return any(_occurs_in_type(type_var, arg, subst) for arg in args)
+    raise TypeError(f"Unsupported type term: {type(term)!r}")
 
 
 def _unify_types(left: TypeTerm, right: TypeTerm, subst: Dict[TypeVar, TypeTerm], where: str) -> None:
@@ -158,6 +168,7 @@ def _freshen_signature(
                 return out
             case TypeConst(name, args):
                 return TypeConst(name, tuple(freshen(arg) for arg in args))
+        raise TypeError(f"Unsupported type term: {type(term)!r}")
 
     return tuple(freshen(arg) for arg in signature.arg_sorts), freshen(signature.result_sort)
 
@@ -192,6 +203,7 @@ def _infer_type_inner(
                 actual_type = _infer_type_inner(arg, engine, var_env, subst, counter)
                 _unify_types(actual_type, expected_type, subst, f"{symbol} argument {index}")
             return _apply_type_subst(expected_result, subst)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
 def infer_type(term: Term, engine: EngineLike) -> TypeTerm:
@@ -208,6 +220,7 @@ def _contains_type_vars(term: TypeTerm) -> bool:
             return True
         case TypeConst(_, args):
             return any(_contains_type_vars(arg) for arg in args)
+    raise TypeError(f"Unsupported type term: {type(term)!r}")
 
 
 def infer_sort(term: Term, engine: EngineLike) -> str:

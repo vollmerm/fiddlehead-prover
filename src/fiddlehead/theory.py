@@ -1,0 +1,733 @@
+from __future__ import annotations
+
+import importlib
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Tuple
+
+from .kernel import (
+    Engine,
+    EngineConfig,
+    InductionScheme,
+    ProofNode,
+    ProofTrace,
+    Rule,
+    SortSignature,
+    TypeConst,
+    TypeVar,
+    _decreases,
+    _new_node,
+    _validate_clause_sorts,
+    get_induction_scheme,
+    get_induction_scheme_for_sort,
+    make_engine,
+    register_induction_scheme,
+    register_sort_signature,
+    var_matches_scheme,
+)
+from .proof import (
+    Clause,
+    ProofCertificate,
+    _check_exact_step,
+    _check_induction_step,
+    _check_rewrite_step,
+    _check_split_step,
+    check_certificate,
+    clause_solved,
+    goal_equality,
+    simplify_clause_with_stages,
+)
+from .syntax import App, Const, Term, V, Var, true
+
+
+@dataclass(frozen=True)
+class Lemma:
+    name: str
+    clause: Clause
+    certificate: ProofCertificate
+
+
+@dataclass(frozen=True)
+class Theory:
+    name: str
+    version: str = "0.0.1"
+    depends_on: Tuple[str, ...] = ()
+    sort_signatures: Dict[str, SortSignature] = field(default_factory=dict)
+    rules: Tuple[Rule, ...] = ()
+    definitions: Dict[str, Rule] = field(default_factory=dict)
+    lemmas: Tuple[Lemma, ...] = ()
+    schemes: Tuple[InductionScheme, ...] = ()
+    precedence: Dict[str, int] = field(default_factory=dict)
+    assoc: Tuple[str, ...] = ()
+    comm: Tuple[str, ...] = ()
+    default_scopes: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(self, "sort_signatures", dict(self.sort_signatures))
+        object.__setattr__(self, "rules", tuple(self.rules))
+        object.__setattr__(self, "definitions", dict(self.definitions))
+        object.__setattr__(self, "lemmas", tuple(self.lemmas))
+        object.__setattr__(self, "schemes", tuple(self.schemes))
+        object.__setattr__(self, "precedence", dict(self.precedence))
+        object.__setattr__(self, "assoc", tuple(self.assoc))
+        object.__setattr__(self, "comm", tuple(self.comm))
+        object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
+
+
+def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
+    x = V("nat_x")
+    y = V("nat_y")
+    zero = Const("0")
+    succ = lambda term: App("S", term)
+    add = lambda left, right: App("add", left, right)
+    mul = lambda left, right: App("mul", left, right)
+    from .kernel import nat_induction_scheme
+
+    return Theory(
+        name=name,
+        version=version,
+        sort_signatures={
+            "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+            "mul": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+        },
+        rules=(
+            Rule(add(zero, y), y),
+            Rule(add(succ(x), y), succ(add(x, y))),
+            Rule(add(x, zero), x),
+            Rule(add(x, succ(y)), succ(add(x, y))),
+            Rule(mul(zero, y), zero),
+            Rule(mul(succ(x), y), add(y, mul(x, y))),
+        ),
+        schemes=(nat_induction_scheme(zero),),
+        precedence={"mul": 4, "add": 3},
+        assoc=("add",),
+        comm=("add",),
+    )
+
+
+def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
+    a = TypeVar("A")
+    head = V("list_xh")
+    tail = V("list_xt", "List")
+    xs = V("list_xs", "List")
+    nil = Const("nil")
+    cons = lambda left, right: App("cons", left, right)
+    append = lambda left, right: App("append", left, right)
+    length = lambda term: App("length", term)
+    zero = Const("0")
+    succ = lambda term: App("S", term)
+    from .kernel import list_induction_scheme
+
+    return Theory(
+        name=name,
+        version=version,
+        sort_signatures={
+            "nil": SortSignature((), TypeConst("List", (a,))),
+            "cons": SortSignature((a, TypeConst("List", (a,))), TypeConst("List", (a,))),
+            "append": SortSignature(
+                (TypeConst("List", (a,)), TypeConst("List", (a,))),
+                TypeConst("List", (a,)),
+            ),
+            "length": SortSignature((TypeConst("List", (a,)),), TypeConst("Nat")),
+        },
+        rules=(
+            Rule(append(nil, xs), xs),
+            Rule(append(cons(head, tail), xs), cons(head, append(tail, xs))),
+            Rule(length(nil), zero),
+            Rule(length(cons(head, tail)), succ(length(tail))),
+        ),
+        schemes=(list_induction_scheme(),),
+        precedence={"append": 3, "length": 3, "cons": 2},
+    )
+
+
+def theory_from_module(module) -> Theory:
+    theory = getattr(module, "THEORY", None)
+    if not isinstance(theory, Theory):
+        raise ValueError("Theory module must export THEORY: Theory.")
+    return theory
+
+
+def load_theory_module(module_name: str) -> Theory:
+    return theory_from_module(importlib.import_module(module_name))
+
+
+def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
+    return engine.get_theory()
+
+
+def _parse_version(version: str) -> Tuple[int, ...]:
+    parts = version.split(".")
+    if any((not part) or (not part.isdigit()) for part in parts):
+        raise ValueError(f"Invalid version string: {version!r}")
+    return tuple(int(part) for part in parts)
+
+
+def _version_at_least(current: str, minimum: str) -> bool:
+    current_parts = _parse_version(current)
+    minimum_parts = _parse_version(minimum)
+    size = max(len(current_parts), len(minimum_parts))
+    current_parts = current_parts + (0,) * (size - len(current_parts))
+    minimum_parts = minimum_parts + (0,) * (size - len(minimum_parts))
+    return current_parts >= minimum_parts
+
+
+def _parse_dependency_spec(spec: str) -> Tuple[str, Optional[str]]:
+    spec = spec.strip()
+    if not spec:
+        raise ValueError("Empty theory dependency spec.")
+    if ">=" in spec:
+        name, minimum = spec.split(">=", 1)
+        name = name.strip()
+        minimum = minimum.strip()
+        if not name or not minimum:
+            raise ValueError(f"Invalid dependency spec: {spec!r}")
+        return name, minimum
+    return spec, None
+
+
+def _check_theory_install_conflicts(
+    engine: Engine,
+    env: "TheoremEnvironment",
+    theory: Theory,
+    install_scope: str,
+) -> None:
+    assert engine.installed_theories is not None
+    installed_version = engine.installed_theories.get(theory.name)
+    if installed_version is not None:
+        if installed_version != theory.version:
+            raise ValueError(
+                f"Theory {theory.name} already installed at version {installed_version}; "
+                f"cannot install incompatible version {theory.version}."
+            )
+        raise ValueError(f"Theory {theory.name}@{theory.version} is already installed.")
+
+    for dep_spec in theory.depends_on:
+        dep_name, dep_minimum = _parse_dependency_spec(dep_spec)
+        current = engine.installed_theories.get(dep_name)
+        if current is None:
+            raise ValueError(f"Missing theory dependency: {dep_name}")
+        if dep_minimum is not None and not _version_at_least(current, dep_minimum):
+            raise ValueError(
+                f"Theory dependency {dep_name}>={dep_minimum} not satisfied by installed "
+                f"version {current}."
+            )
+
+    for symbol, signature in theory.sort_signatures.items():
+        existing = engine.get_sort_signature(symbol)
+        if existing is not None and existing != signature:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on symbol {symbol}: existing signature "
+                f"{existing} vs {signature}."
+            )
+
+    assert engine.config is not None
+    for symbol, rank in theory.precedence.items():
+        existing_rank = engine.config.precedence.get(symbol)
+        if existing_rank is not None and existing_rank != rank:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on precedence for {symbol}: existing "
+                f"{existing_rank} vs {rank}."
+            )
+
+    for symbol in theory.assoc:
+        if symbol in engine.config.comm and symbol not in engine.config.assoc:
+            raise ValueError(
+                f"Theory {theory.name} requests associativity for {symbol} but engine marks "
+                "it non-associative."
+            )
+
+    for symbol in theory.comm:
+        if symbol in engine.config.comm and symbol not in engine.config.assoc:
+            raise ValueError(
+                f"Theory {theory.name} requests commutativity for non-associative symbol "
+                f"{symbol}."
+            )
+
+    for lemma in theory.lemmas:
+        existing = env.lemmas.get(lemma.name)
+        if existing is not None and existing != lemma:
+            raise ValueError(f"Theory {theory.name} conflicts on lemma name: {lemma.name}.")
+
+    for definition_name, definition in theory.definitions.items():
+        existing = env.definitions.get(definition_name)
+        if existing is not None and existing != definition:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on definition name: {definition_name}."
+            )
+
+    for scope in theory.default_scopes:
+        if scope == install_scope:
+            continue
+        existing_scope_rules = env.scoped_rule_sets.get(scope)
+        if existing_scope_rules:
+            raise ValueError(
+                f"Theory {theory.name} default scope {scope!r} already exists with rules; "
+                "scope collision is not allowed."
+            )
+
+
+def _clone_theorem_environment(
+    engine: Engine,
+    source: Optional["TheoremEnvironment"],
+) -> Optional["TheoremEnvironment"]:
+    if source is None:
+        return None
+    cloned = TheoremEnvironment(engine, list(source.base_rules))
+    cloned.lemmas = dict(source.lemmas)
+    cloned.definitions = dict(source.definitions)
+    cloned.lemma_rewrites = dict(source.lemma_rewrites)
+    cloned.scoped_rule_sets = {scope: list(rules) for scope, rules in source.scoped_rule_sets.items()}
+    cloned.active_scopes = set(source.active_scopes)
+    return cloned
+
+
+def _clone_engine_for_theory_preflight(engine: Engine) -> Engine:
+    assert engine.config is not None
+    cloned_config = EngineConfig(
+        precedence=dict(engine.config.precedence),
+        assoc=set(engine.config.assoc),
+        comm=set(engine.config.comm),
+    )
+    cloned = make_engine(
+        rules=list(engine.rules),
+        ctx=engine.ctx,
+        fuel=engine.fuel,
+        config=cloned_config,
+        ground_cache={},
+        schemes=dict(engine.schemes),
+        sort_signatures=dict(engine.sort_signatures),
+        installed_theories=dict(engine.installed_theories),
+    )
+    cloned.theory = _clone_theorem_environment(cloned, engine.theory)
+    return cloned
+
+
+def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) -> Tuple[str, ...]:
+    env = get_theorem_environment(engine)
+    install_scope = f"theory:{theory.name}"
+    _check_theory_install_conflicts(engine, env, theory, install_scope)
+
+    seen: set[str] = set()
+    activated_list: list[str] = []
+    for scope in (install_scope, *theory.default_scopes):
+        env.create_scope(scope)
+        if scope not in seen:
+            seen.add(scope)
+            activated_list.append(scope)
+    activated = tuple(activated_list)
+
+    for symbol in sorted(theory.sort_signatures):
+        register_sort_signature(engine, symbol, theory.sort_signatures[symbol])
+
+    assert engine.config is not None
+    engine.config.precedence.update(theory.precedence)
+    engine.config.assoc.update(theory.assoc)
+    engine.config.comm.update(theory.comm)
+
+    for scheme in sorted(theory.schemes, key=lambda item: item.name):
+        register_induction_scheme(engine, scheme)
+
+    for name in sorted(theory.definitions):
+        definition = theory.definitions[name]
+        env.register_definition(name, definition.lhs, definition.rhs, scope=install_scope)
+
+    for index, rule in enumerate(theory.rules):
+        env.register_rule(rule, scope=install_scope, label=f"{theory.name}.rule[{index}]")
+
+    for lemma in sorted(theory.lemmas, key=lambda item: item.name):
+        env.register_lemma(lemma)
+    if activate_scopes:
+        for scope in activated:
+            env.activate_scope(scope)
+    engine.installed_theories[theory.name] = theory.version
+    return activated
+
+
+def install_theory(engine: Engine, theory: Theory, activate_scopes: bool = True) -> Tuple[str, ...]:
+    preflight = _clone_engine_for_theory_preflight(engine)
+    _install_theory_impl(preflight, theory, activate_scopes=activate_scopes)
+    return _install_theory_impl(engine, theory, activate_scopes=activate_scopes)
+
+
+def _contains_symbol(term: Term, symbol: str) -> bool:
+    match term:
+        case Var():
+            return False
+        case _ if getattr(term, "symbol", None) == symbol:
+            return True
+        case _:
+            return any(_contains_symbol(arg, symbol) for arg in getattr(term, "args", ()))
+
+
+def _select_induction_scheme(
+    engine: Engine,
+    var: Var,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+) -> InductionScheme:
+    chosen = scheme
+    if chosen is None and scheme_name is not None:
+        chosen = get_induction_scheme(engine, scheme_name)
+    if chosen is None and var.sort is not None:
+        chosen = get_induction_scheme_for_sort(engine, var.sort)
+    if chosen is None:
+        raise ValueError("No induction scheme provided and no scheme found for variable sort.")
+    if not var_matches_scheme(var, chosen):
+        raise ValueError(
+            f"Variable {var.name} is incompatible with induction scheme {chosen.name}."
+        )
+    return chosen
+
+
+def _orient_equality_as_rewrite(
+    config: EngineConfig,
+    lhs: Term,
+    rhs: Term,
+    orientation: str,
+) -> Rule:
+    if orientation == "auto":
+        if _decreases(config, lhs, rhs):
+            return Rule(lhs, rhs)
+        if _decreases(config, rhs, lhs):
+            return Rule(rhs, lhs)
+        raise ValueError("Lemma cannot be oriented into a decreasing rewrite rule.")
+    if orientation == "lhs_to_rhs":
+        if not _decreases(config, lhs, rhs):
+            raise ValueError("Requested orientation lhs_to_rhs is not decreasing.")
+        return Rule(lhs, rhs)
+    if orientation == "rhs_to_lhs":
+        if not _decreases(config, rhs, lhs):
+            raise ValueError("Requested orientation rhs_to_lhs is not decreasing.")
+        return Rule(rhs, lhs)
+    raise ValueError(f"Unknown orientation: {orientation}")
+
+
+class TheoremEnvironment:
+    def __init__(self, engine: Engine, base_rules: list[Rule]):
+        self.engine = engine
+        self.base_rules: list[Rule] = list(base_rules)
+        self.lemmas: Dict[str, Lemma] = {}
+        self.definitions: Dict[str, Rule] = {}
+        self.lemma_rewrites: Dict[str, Rule] = {}
+        self.scoped_rule_sets: Dict[str, list[Rule]] = {}
+        self.active_scopes: set[str] = set()
+
+    def _sync_engine_rules(self) -> None:
+        active_rules = list(self.base_rules)
+        for scope, rules in self.scoped_rule_sets.items():
+            if scope in self.active_scopes:
+                active_rules.extend(rules)
+        self.engine.reset_rules(active_rules)
+
+    def _add_rule_to_scope(self, scope: str, rule: Rule) -> None:
+        self.scoped_rule_sets.setdefault(scope, []).append(rule)
+        if scope in self.active_scopes:
+            self._sync_engine_rules()
+
+    def create_scope(self, name: str) -> None:
+        self.scoped_rule_sets.setdefault(name, [])
+
+    def activate_scope(self, name: str) -> None:
+        if name not in self.scoped_rule_sets:
+            raise ValueError(f"Unknown scope: {name}")
+        self.active_scopes.add(name)
+        self._sync_engine_rules()
+
+    def deactivate_scope(self, name: str) -> None:
+        self.active_scopes.discard(name)
+        self._sync_engine_rules()
+
+    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+        if lemma.clause.assumptions:
+            raise ValueError(
+                "Only assumption-free lemmas can be registered in this minimal environment."
+            )
+        if goal_equality(lemma.clause.goal) is None:
+            raise ValueError("Lemma goal must be an equality.")
+        _validate_clause_sorts(lemma.clause, self.engine, f"lemma {lemma.name}")
+        if lemma.certificate.clause != lemma.clause:
+            raise ValueError("Lemma certificate root does not match lemma clause.")
+        if not check_certificate(
+            lemma.certificate,
+            self.engine,
+            depth=depth,
+            induction_depth=induction_depth,
+        ):
+            raise ValueError("Lemma certificate failed validation.")
+        self.lemmas[lemma.name] = lemma
+
+    def register_rule(
+        self,
+        rule: Rule,
+        scope: str = "theories",
+        label: str = "theory rule",
+    ) -> None:
+        from .kernel import _validate_rule_sorts
+
+        _validate_rule_sorts(rule, self.engine, label)
+        self._add_rule_to_scope(scope, rule)
+
+    def register_definition(
+        self,
+        name: str,
+        lhs: Term,
+        rhs: Term,
+        scope: str = "definitions",
+    ) -> None:
+        if getattr(lhs, "args", None) is None:
+            raise ValueError("Definition lhs must be a function application.")
+        symbol = lhs.symbol
+        if _contains_symbol(rhs, symbol):
+            raise ValueError("Recursive definitions are not supported in this prover core.")
+        assert self.engine.config is not None
+        if symbol not in self.engine.config.precedence:
+            base = max(self.engine.config.precedence.values(), default=0)
+            self.engine.config.precedence[symbol] = base + 1
+        rule = Rule(lhs, rhs)
+        from .kernel import _validate_rule_sorts
+
+        _validate_rule_sorts(rule, self.engine, f"definition {name}")
+        self.definitions[name] = rule
+        self._add_rule_to_scope(scope, rule)
+
+    def register_lemma_rewrite(
+        self,
+        lemma_name: str,
+        scope: str = "lemmas",
+        orientation: str = "auto",
+    ) -> Rule:
+        lemma = self.lemmas.get(lemma_name)
+        if lemma is None:
+            raise ValueError(f"Unknown lemma: {lemma_name}")
+        eq_goal = goal_equality(lemma.clause.goal)
+        if eq_goal is None:
+            raise ValueError("Lemma goal must be an equality.")
+        lhs, rhs = eq_goal
+        assert self.engine.config is not None
+        rule = _orient_equality_as_rewrite(self.engine.config, lhs, rhs, orientation)
+        from .kernel import _validate_rule_sorts
+
+        _validate_rule_sorts(rule, self.engine, f"lemma rewrite {lemma_name}")
+        self.lemma_rewrites[lemma_name] = rule
+        self._add_rule_to_scope(scope, rule)
+        return rule
+
+
+class ProofSession:
+    def __init__(self, clause: Clause, engine: Engine):
+        self.engine = engine
+        self.goals: list[Clause] = [clause]
+        self.theory = get_theorem_environment(engine)
+        self.trace = ProofTrace()
+        self._trace_root = _new_node("session", clause, note="interactive")
+        self.trace.roots.append(self._trace_root)
+
+    def _record(
+        self,
+        kind: str,
+        clause: Clause,
+        note: str = "",
+        solved: Optional[bool] = None,
+        children: Optional[list[ProofNode]] = None,
+    ) -> None:
+        node = _new_node(kind, clause, note=note)
+        if children:
+            node.children.extend(children)
+        node.solved = solved
+        self._trace_root.children.append(node)
+
+    def current_goal(self) -> Optional[Clause]:
+        if not self.goals:
+            return None
+        return self.goals[0]
+
+    def _replace_current(self, new_goals: list[Clause]) -> None:
+        self.goals = new_goals + self.goals[1:]
+
+    def assumptions(self) -> Tuple[Tuple[Term, Term], ...]:
+        goal = self.current_goal()
+        if goal is None:
+            return ()
+        return goal.assumptions
+
+    def keep_assumptions(self, indices: list[int]) -> None:
+        goal = self.current_goal()
+        if goal is None:
+            raise ValueError("No goals left.")
+        assumptions = list(goal.assumptions)
+        chosen: list[Tuple[Term, Term]] = []
+        for index in indices:
+            if index < 0 or index >= len(assumptions):
+                raise ValueError(f"Assumption index out of range: {index}")
+            chosen.append(assumptions[index])
+        next_goal = Clause(tuple(chosen), goal.goal)
+        self._record(
+            "session-keep-assumptions",
+            goal,
+            note=f"indices={indices}",
+            children=[_new_node("goal", next_goal)],
+        )
+        self.goals[0] = next_goal
+
+    def simp(self) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        simplified, stage_data = simplify_clause_with_stages(original, self.engine)
+        stage_nodes = [_new_node(f"stage-{name}", clause) for name, clause in stage_data]
+        if clause_solved(simplified):
+            self._record(
+                "session-simp",
+                original,
+                note="discharged",
+                solved=True,
+                children=stage_nodes + [_new_node("goal", simplified)],
+            )
+            self.goals = self.goals[1:]
+            return
+        self._record(
+            "session-simp",
+            original,
+            solved=False,
+            children=stage_nodes + [_new_node("goal", simplified)],
+        )
+        self.goals[0] = simplified
+
+    def split(self) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        branches = _check_split_step(original)
+        kids = [_new_node("session-branch", branch, note=f"index={index}") for index, branch in enumerate(branches)]
+        self._record("session-split", original, note=f"branches={len(branches)}", children=kids)
+        self._replace_current(branches)
+
+    def induct(
+        self,
+        var: Var,
+        scheme: Optional[InductionScheme] = None,
+        scheme_name: Optional[str] = None,
+    ) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        chosen = _select_induction_scheme(self.engine, var, scheme=scheme, scheme_name=scheme_name)
+        branches = _check_induction_step(original, var, chosen, self.engine)
+        kids = [_new_node("induction-branch", branch, note=f"index={index}") for index, branch in enumerate(branches)]
+        self._record(
+            "session-induct",
+            original,
+            note=f"var={var.name}, scheme={chosen.name}",
+            children=kids,
+        )
+        self._replace_current(branches)
+
+    def induct_many(
+        self,
+        vars: list[Var],
+        schemes: Optional[list[Optional[InductionScheme]]] = None,
+        scheme_names: Optional[list[Optional[str]]] = None,
+    ) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        if not vars:
+            raise ValueError("induct_many requires at least one variable.")
+        if schemes is not None and len(schemes) != len(vars):
+            raise ValueError("schemes length must match vars length.")
+        if scheme_names is not None and len(scheme_names) != len(vars):
+            raise ValueError("scheme_names length must match vars length.")
+
+        original = self.goals[0]
+        pending = [original]
+        plan: list[tuple[str, str]] = []
+        for index, var in enumerate(vars):
+            chosen = _select_induction_scheme(
+                self.engine,
+                var,
+                scheme=schemes[index] if schemes is not None else None,
+                scheme_name=scheme_names[index] if scheme_names is not None else None,
+            )
+            plan.append((var.name, chosen.name))
+            next_pending: list[Clause] = []
+            for clause in pending:
+                next_pending.extend(_check_induction_step(clause, var, chosen, self.engine))
+            pending = next_pending
+
+        kids = [_new_node("induction-branch", branch, note=f"index={index}") for index, branch in enumerate(pending)]
+        note = ", ".join(f"{name}:{scheme_name}" for name, scheme_name in plan)
+        self._record("session-induct-many", original, note=note, children=kids)
+        self._replace_current(pending)
+
+    def rewrite(self, rule: Rule) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        rewritten = _check_rewrite_step(original, rule, self.engine)
+        self._record(
+            "session-rewrite",
+            original,
+            note=f"{rule.lhs} -> {rule.rhs}",
+            children=[_new_node("goal", rewritten)],
+        )
+        self.goals[0] = rewritten
+
+    def exact(self) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        solved = _check_exact_step(original, self.engine)
+        self._record("session-exact", original, solved=True, children=[_new_node("goal", solved)])
+        self.goals = self.goals[1:]
+
+    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+        self.theory.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
+
+    def apply_lemma(self, name: str) -> None:
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        lemma = self.theory.lemmas.get(name)
+        if lemma is None:
+            raise ValueError(f"Unknown lemma: {name}")
+        eq_goal = goal_equality(lemma.clause.goal)
+        assert eq_goal is not None
+        next_goal = Clause(original.assumptions + (eq_goal,), original.goal)
+        self._record(
+            "session-apply-lemma",
+            original,
+            note=name,
+            children=[_new_node("goal", next_goal)],
+        )
+        self.goals[0] = next_goal
+
+    def register_definition(
+        self,
+        name: str,
+        lhs: Term,
+        rhs: Term,
+        scope: str = "definitions",
+    ) -> None:
+        self.theory.register_definition(name, lhs, rhs, scope=scope)
+
+    def register_lemma_rewrite(
+        self,
+        lemma_name: str,
+        scope: str = "lemmas",
+        orientation: str = "auto",
+    ) -> None:
+        self.theory.register_lemma_rewrite(lemma_name, scope=scope, orientation=orientation)
+
+    def activate_scope(self, name: str) -> None:
+        self.theory.activate_scope(name)
+        self._record("session-activate-scope", self.current_goal() or Clause((), true), note=name)
+
+    def deactivate_scope(self, name: str) -> None:
+        self.theory.deactivate_scope(name)
+        self._record("session-deactivate-scope", self.current_goal() or Clause((), true), note=name)
+
+    def qed(self) -> bool:
+        done = not self.goals
+        current = self.current_goal() or Clause((), true)
+        self._record("session-qed", current, solved=done)
+        return done

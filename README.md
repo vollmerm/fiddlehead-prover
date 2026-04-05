@@ -32,7 +32,7 @@ The most useful pieces are:
 | `nat_theory`, `list_theory`, `install_theory` | Load common theory fragments |
 | `ProofSession` | Drive proofs interactively |
 
-## Example
+## Examples
 
 ```python
 from fiddlehead.prover import *
@@ -56,6 +56,44 @@ goal = Clause((), eq(add(x, zero), x))
 scheme = get_induction_scheme(engine, "nat")
 assert scheme is not None
 assert prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
+```
+
+```python
+from fiddlehead.prover import *
+
+reset_var_interner()
+
+eq = lambda a, b: App("eq", a, b)
+append = lambda a, b: App("append", a, b)
+
+xs = V("xs", "List")
+ys = V("ys", "List")
+zs = V("zs", "List")
+
+engine = make_engine(rules=builtin_rules())
+install_theory(engine, list_theory(), activate_scopes=True)
+
+list_scheme = get_induction_scheme(engine, "list")
+assert list_scheme is not None
+
+goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
+ok, trace = prove_with_trace(
+    goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
+)
+assert ok
+print(render_proof_trace(trace))
+```
+
+Example proof tree output:
+
+```text
+- prove [solved] :: depth=12 -> eq(append(append(xs, ys), zs), append(xs, append(ys, zs)))
+  - simplify -> eq(append(append(xs, ys), zs), append(xs, append(ys, zs)))
+  - induction [solved] :: var=xs, scheme=list -> eq(append(append(xs, ys), zs), append(xs, append(ys, zs)))
+    - induction-branch [solved] :: depth=12 -> eq(append(append(nil, ys), zs), append(nil, append(ys, zs)))
+      - simplify -> true
+    - induction-branch [solved] :: depth=12 -> eq(append(append(cons(xs_cons_arg_0, xs_ih_0), ys), zs), append(cons(xs_cons_arg_0, xs_ih_0), append(ys, zs)))
+      - simplify -> true
 ```
 
 ## Project layout

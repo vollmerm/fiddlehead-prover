@@ -18,6 +18,7 @@ Boyer–Moore style rewriting core with:
 - checked proof certificates
 - interactive theorem environment/session
 - strict inference-first term typing
+- modular theory packages
 
 Public API (small, stable surface):
 - term constructors: V, Const, App
@@ -835,6 +836,7 @@ class Engine:
     ground_cache: Optional[Dict[Term, Term]] = None
     schemes: Optional[Dict[str, "InductionScheme"]] = None
     sort_signatures: Optional[Dict[str, SortSignature]] = None
+    installed_theories: Optional[Dict[str, str]] = None
     theory: Optional["TheoremEnvironment"] = None
 
     def __post_init__(self):
@@ -851,6 +853,10 @@ class Engine:
             self.sort_signatures = default_sort_signatures()
         else:
             self.sort_signatures = dict(self.sort_signatures)
+        if self.installed_theories is None:
+            self.installed_theories = {}
+        else:
+            self.installed_theories = dict(self.installed_theories)
         for i, rule in enumerate(self.rules):
             _validate_rule_sorts(rule, self, f"rule[{i}]")
 
@@ -1031,6 +1037,7 @@ def make_engine(
     ground_cache: Optional[Dict[Term, Term]] = None,
     schemes: Optional[Dict[str, "InductionScheme"]] = None,
     sort_signatures: Optional[Dict[str, SortSignature]] = None,
+    installed_theories: Optional[Dict[str, str]] = None,
 ) -> Engine:
     return Engine(
         rules=rules,
@@ -1041,6 +1048,7 @@ def make_engine(
         ground_cache=ground_cache,
         schemes=schemes,
         sort_signatures=sort_signatures,
+        installed_theories=installed_theories,
     )
 
 
@@ -1109,9 +1117,133 @@ def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
     return engine.get_theory()
 
 
-def install_theory(engine: Engine, theory: "Theory", activate_scopes: bool = True) -> Tuple[str, ...]:
+def _parse_version(version: str) -> Tuple[int, ...]:
+    parts = version.split(".")
+    if any((not p) or (not p.isdigit()) for p in parts):
+        raise ValueError(f"Invalid version string: {version!r}")
+    return tuple(int(p) for p in parts)
+
+
+def _version_at_least(current: str, minimum: str) -> bool:
+    c = _parse_version(current)
+    m = _parse_version(minimum)
+    n = max(len(c), len(m))
+    c = c + (0,) * (n - len(c))
+    m = m + (0,) * (n - len(m))
+    return c >= m
+
+
+def _parse_dependency_spec(spec: str) -> Tuple[str, Optional[str]]:
+    spec = spec.strip()
+    if not spec:
+        raise ValueError("Empty theory dependency spec.")
+    if ">=" in spec:
+        name, minimum = spec.split(">=", 1)
+        name = name.strip()
+        minimum = minimum.strip()
+        if not name or not minimum:
+            raise ValueError(f"Invalid dependency spec: {spec!r}")
+        return name, minimum
+    return spec, None
+
+
+def _check_theory_install_conflicts(engine: Engine, env: "TheoremEnvironment", theory: "Theory", install_scope: str):
+    assert engine.installed_theories is not None
+    installed_version = engine.installed_theories.get(theory.name)
+    if installed_version is not None:
+        if installed_version != theory.version:
+            raise ValueError(
+                f"Theory {theory.name} already installed at version {installed_version}; "
+                f"cannot install incompatible version {theory.version}."
+            )
+        raise ValueError(f"Theory {theory.name}@{theory.version} is already installed.")
+
+    for dep_spec in theory.depends_on:
+        dep_name, dep_minimum = _parse_dependency_spec(dep_spec)
+        current = engine.installed_theories.get(dep_name)
+        if current is None:
+            raise ValueError(f"Missing theory dependency: {dep_name}")
+        if dep_minimum is not None and not _version_at_least(current, dep_minimum):
+            raise ValueError(
+                f"Theory dependency {dep_name}>={dep_minimum} not satisfied by installed version {current}."
+            )
+
+    for symbol, signature in theory.sort_signatures.items():
+        existing = engine.get_sort_signature(symbol)
+        if existing is not None and existing != signature:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on symbol {symbol}: "
+                f"existing signature {existing} vs {signature}."
+            )
+
+    for lemma in theory.lemmas:
+        existing = env.lemmas.get(lemma.name)
+        if existing is not None and existing != lemma:
+            raise ValueError(f"Theory {theory.name} conflicts on lemma name: {lemma.name}.")
+
+    for definition_name, definition in theory.definitions.items():
+        existing = env.definitions.get(definition_name)
+        if existing is not None and existing != definition:
+            raise ValueError(f"Theory {theory.name} conflicts on definition name: {definition_name}.")
+
+    for scope in theory.default_scopes:
+        if scope == install_scope:
+            continue
+        existing_scope_rules = env.scoped_rule_sets.get(scope)
+        if existing_scope_rules:
+            raise ValueError(
+                f"Theory {theory.name} default scope {scope!r} already exists with rules; "
+                "scope collision is not allowed."
+            )
+
+
+def _clone_theorem_environment(engine: Engine, source: Optional["TheoremEnvironment"]) -> Optional["TheoremEnvironment"]:
+    if source is None:
+        return None
+    cloned = TheoremEnvironment(engine, list(source.base_rules))
+    cloned.lemmas = dict(source.lemmas)
+    cloned.definitions = dict(source.definitions)
+    cloned.lemma_rewrites = dict(source.lemma_rewrites)
+    cloned.scoped_rule_sets = {scope: list(rules) for scope, rules in source.scoped_rule_sets.items()}
+    cloned.active_scopes = set(source.active_scopes)
+    return cloned
+
+
+def _clone_engine_for_theory_preflight(engine: Engine) -> Engine:
+    assert engine.config is not None
+    cloned_config = EngineConfig(
+        precedence=dict(engine.config.precedence),
+        assoc=set(engine.config.assoc),
+        comm=set(engine.config.comm),
+    )
+    cloned = make_engine(
+        rules=list(engine.rules),
+        ctx=engine.ctx,
+        fuel=engine.fuel,
+        config=cloned_config,
+        ground_cache={},
+        schemes=dict(engine.schemes),
+        sort_signatures=dict(engine.sort_signatures),
+        installed_theories=dict(engine.installed_theories),
+    )
+    cloned.theory = _clone_theorem_environment(cloned, engine.theory)
+    return cloned
+
+
+def _install_theory_impl(engine: Engine, theory: "Theory", activate_scopes: bool) -> Tuple[str, ...]:
     env = get_theorem_environment(engine)
     install_scope = f"theory:{theory.name}"
+    _check_theory_install_conflicts(engine, env, theory, install_scope)
+
+    seen: set[str] = set()
+    activated_list: list[str] = []
+    for scope in (install_scope, *theory.default_scopes):
+        env.create_scope(scope)
+        if scope not in seen:
+            seen.add(scope)
+            activated_list.append(scope)
+    activated = tuple(activated_list)
+
     for symbol in sorted(theory.sort_signatures):
         register_sort_signature(engine, symbol, theory.sort_signatures[symbol])
 
@@ -1127,19 +1259,16 @@ def install_theory(engine: Engine, theory: "Theory", activate_scopes: bool = Tru
 
     for lemma in sorted(theory.lemmas, key=lambda l: l.name):
         env.register_lemma(lemma)
-
-    seen: set[str] = set()
-    activated_list: list[str] = []
-    for scope in (install_scope, *theory.default_scopes):
-        env.create_scope(scope)
-        if scope not in seen:
-            seen.add(scope)
-            activated_list.append(scope)
-    activated = tuple(activated_list)
     if activate_scopes:
         for scope in activated:
             env.activate_scope(scope)
+    engine.installed_theories[theory.name] = theory.version
     return activated
+
+
+def install_theory(engine: Engine, theory: "Theory", activate_scopes: bool = True) -> Tuple[str, ...]:
+    _install_theory_impl(_clone_engine_for_theory_preflight(engine), theory, activate_scopes)
+    return _install_theory_impl(engine, theory, activate_scopes)
 
 
 def register_sort_signature(engine: Engine, symbol: str, signature: SortSignature):
@@ -1700,9 +1829,9 @@ class Theory:
 
     def __post_init__(self):
         object.__setattr__(self, "depends_on", tuple(self.depends_on))
-        object.__setattr__(self, "sort_signatures", dict(self.sort_signatures or {}))
+        object.__setattr__(self, "sort_signatures", dict(self.sort_signatures))
         object.__setattr__(self, "rules", tuple(self.rules))
-        object.__setattr__(self, "definitions", dict(self.definitions or {}))
+        object.__setattr__(self, "definitions", dict(self.definitions))
         object.__setattr__(self, "lemmas", tuple(self.lemmas))
         object.__setattr__(self, "schemes", tuple(self.schemes))
         object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
@@ -2547,6 +2676,69 @@ if __name__ == "__main__":
         assert False
     except ValueError:
         pass
+
+    # Test 54: dependency and conflict checks reject unsafe theory installs
+    install_engine_c = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    dep_only = Theory(name="toy.dep-only", depends_on=("core.arith>=1.0.0",))
+    try:
+        install_theory(install_engine_c, dep_only)
+        assert False
+    except ValueError:
+        pass
+
+    core_arith = Theory(name="core.arith", version="1.0.0")
+    install_theory(install_engine_c, core_arith, activate_scopes=False)
+    install_theory(install_engine_c, dep_only, activate_scopes=False)
+    try:
+        install_theory(install_engine_c, Theory(name="core.arith", version="2.0.0"), activate_scopes=False)
+        assert False
+    except ValueError:
+        pass
+    try:
+        install_theory(
+            install_engine_c,
+            Theory(name="bad.sig", sort_signatures={"add": SortSignature(("Nat", "Bool"), "Nat")}),
+            activate_scopes=False,
+        )
+        assert False
+    except ValueError:
+        pass
+
+    install_env_c = get_theorem_environment(install_engine_c)
+    install_env_c.create_scope("shared_scope")
+    install_env_c.register_rule(Rule(add(x, zero), x), scope="shared_scope", label="seed.shared")
+    try:
+        install_theory(
+            install_engine_c,
+            Theory(name="bad.scope", default_scopes=("shared_scope",)),
+            activate_scopes=False,
+        )
+        assert False
+    except ValueError:
+        pass
+
+    # Test 55: theory install is atomic on validation failure
+    install_engine_d = make_engine(rules=install_rules, config=shared_config, ground_cache={}, schemes={})
+    bad_atomic = Theory(
+        name="bad.atomic",
+        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        rules=(Rule(add(nil, zero), zero),),
+        default_scopes=("atomic_scope",),
+    )
+    try:
+        install_theory(install_engine_d, bad_atomic, activate_scopes=True)
+        assert False
+    except ValueError:
+        pass
+    assert "bad.atomic" not in install_engine_d.installed_theories
+    try:
+        infer_sort(App("double", S(zero)), install_engine_d)
+        assert False
+    except ValueError:
+        pass
+    install_env_d = get_theorem_environment(install_engine_d)
+    assert "theory:bad.atomic" not in install_env_d.scoped_rule_sets
+    assert "atomic_scope" not in install_env_d.scoped_rule_sets
 
     print("\nAppend associativity proof trace:")
     print(rendered)

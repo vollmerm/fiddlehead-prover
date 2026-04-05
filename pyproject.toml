@@ -1,0 +1,19 @@
+[project]
+name = "fiddlehead"
+version = "0.1.0"
+description = "A minimal proof assistant"
+requires-python = ">=3.10"
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

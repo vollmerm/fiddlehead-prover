@@ -62,6 +62,7 @@ class Theory:
     name: str
     version: str = "0.0.1"
     depends_on: Tuple[str, ...] = ()
+    sort_arities: Dict[str, int] = field(default_factory=dict)
     sort_signatures: Dict[str, SortSignature] = field(default_factory=dict)
     rules: Tuple[Rule, ...] = ()
     definitions: Dict[str, Rule] = field(default_factory=dict)
@@ -74,6 +75,7 @@ class Theory:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "depends_on", tuple(self.depends_on))
+        object.__setattr__(self, "sort_arities", dict(self.sort_arities))
         object.__setattr__(self, "sort_signatures", dict(self.sort_signatures))
         object.__setattr__(self, "rules", tuple(self.rules))
         object.__setattr__(self, "definitions", dict(self.definitions))
@@ -145,6 +147,7 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     return Theory(
         name=name,
         version=version,
+        sort_arities={"List": 1},
         sort_signatures={
             "nil": SortSignature((), TypeConst("List", (a,))),
             "cons": SortSignature((a, TypeConst("List", (a,))), TypeConst("List", (a,))),
@@ -252,6 +255,14 @@ def _check_theory_install_conflicts(
                 f"{existing_signature} vs {signature}."
             )
 
+    for sort_name, arity in theory.sort_arities.items():
+        existing_arity = engine.sort_arities.get(sort_name)
+        if existing_arity is not None and existing_arity != arity:
+            raise ValueError(
+                f"Theory {theory.name} conflicts on sort constructor {sort_name}: existing "
+                f"arity {existing_arity} vs {arity}."
+            )
+
     for symbol, rank in theory.precedence.items():
         existing_rank = engine.config.precedence.get(symbol)
         if existing_rank is not None and existing_rank != rank:
@@ -326,6 +337,7 @@ def _clone_engine_for_theory_preflight(engine: Engine) -> Engine:
         ground_cache={},
         schemes=dict(engine.schemes),
         sort_signatures=dict(engine.sort_signatures),
+        sort_arities=dict(engine.sort_arities),
         installed_theories=dict(engine.installed_theories),
     )
     cloned.theory = _clone_theorem_environment(cloned, engine.theory)
@@ -345,6 +357,8 @@ def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) 
             seen.add(scope)
             activated_list.append(scope)
     activated = tuple(activated_list)
+
+    engine.sort_arities.update(theory.sort_arities)
 
     for symbol in sorted(theory.sort_signatures):
         register_sort_signature(engine, symbol, theory.sort_signatures[symbol])

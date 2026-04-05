@@ -1,8 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "fiddlehead"
 version = "0.1.0"
 description = "A minimal proof assistant"
+readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+  { name="Michael Vollmer", email="michael.vollmer90@gmail.com" },
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/vollmerm/fiddlehead-prover"
+Issues = "https://github.com/vollmerm/fiddlehead-prover/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.black]
 line-length = 88

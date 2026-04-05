@@ -654,6 +654,17 @@ def test_typing_theories_and_installation(env):
     assert "theory:bad.atomic" not in install_env_d.scoped_rule_sets
     assert "atomic_scope" not in install_env_d.scoped_rule_sets
 
+    install_engine_e = make_engine(
+        rules=install_rules, config=shared_config, ground_cache={}, schemes={}
+    )
+    install_theory(install_engine_e, list_theory(), activate_scopes=False)
+    with pytest.raises(ValueError):
+        install_theory(
+            install_engine_e,
+            Theory(name="bad.sort-arity", sort_arities={"List": 2}),
+            activate_scopes=False,
+        )
+
     mul_zero_goal = Clause((), App("eq", mul(x_nat, zero), zero))
     assert prove_with_registered_induction(
         mul_zero_goal, engine, x_nat, "nat", depth=12, induction_depth=1
@@ -690,17 +701,20 @@ def test_typing_theories_and_installation(env):
 
     core_config = default_engine_config()
     core_sigs = default_sort_signatures()
+    core_engine = make_engine(rules=builtin_rules(), config=core_config, ground_cache={}, schemes={})
     for sym in ("add", "mul", "nil", "cons", "append", "length"):
         assert sym not in core_config.precedence
         assert sym not in core_config.assoc
         assert sym not in core_config.comm
         assert sym not in core_sigs
+    assert "List" not in core_engine.sort_arities
 
     nat_core = nat_theory()
     assert nat_core.precedence["add"] == 3
     assert nat_core.precedence["mul"] == 4
     assert "add" in nat_core.assoc and "add" in nat_core.comm
     list_core = list_theory()
+    assert list_core.sort_arities["List"] == 1
     assert list_core.precedence["cons"] == 2
     assert list_core.precedence["append"] == 3
     assert list_core.precedence["length"] == 3

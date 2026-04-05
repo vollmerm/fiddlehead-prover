@@ -2,7 +2,7 @@
 
 Fiddlehead is a tiny proof assistant with a pleasantly mossy vibe: a pocket-sized theorem prover for rewriting terms, chasing equalities, and occasionally coaxing induction into doing something clever.
 
-It exposes a public Python API through `fiddlehead.prover`. Under the hood it supports:
+It exposes a public Python API through `fiddlehead`, which re-exports the stable interface from `fiddlehead.prover`. Under the hood it supports:
 
 - first-order terms 
 - rewrite rules and normalization
@@ -12,7 +12,13 @@ It exposes a public Python API through `fiddlehead.prover`. Under the hood it su
 
 ## Public-facing API
 
-The main entrypoint is:
+The recommended entrypoint is:
+
+```python
+from fiddlehead import *
+```
+
+The lower-level module path also works:
 
 ```python
 from fiddlehead.prover import *
@@ -35,7 +41,7 @@ The most useful pieces are:
 ## Examples
 
 ```python
-from fiddlehead.prover import *
+from fiddlehead import *
 
 reset_var_interner()
 
@@ -59,7 +65,7 @@ assert prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
 ```
 
 ```python
-from fiddlehead.prover import *
+from fiddlehead import *
 
 reset_var_interner()
 
@@ -104,10 +110,15 @@ Example proof tree output:
 - `src/fiddlehead/proof.py`: clauses, proof search, certificates
 - `src/fiddlehead/theory.py`: theories, theorem environments, sessions
 
-## Development
+## Installation
 
-Run tests from the repository root with:
+Clone the repo and install it locally for development:
 
 ```bash
-python3 -m pytest -q
+git clone https://github.com/vollmerm/fiddlehead-prover.git
+cd fiddlehead-prover
+python -m venv .venv # or python3
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```

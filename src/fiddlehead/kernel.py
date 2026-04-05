@@ -394,11 +394,13 @@ class Engine:
     ground_cache: Dict[Term, Term] = field(default_factory=dict)
     schemes: Dict[str, InductionScheme] = field(default_factory=dict)
     sort_signatures: Dict[str, SortSignature] = field(default_factory=default_sort_signatures)
+    sort_arities: Dict[str, int] = field(default_factory=dict)
     installed_theories: Dict[str, str] = field(default_factory=dict)
     theory: TheoremEnvironment | None = None
 
     def __post_init__(self) -> None:
         self.sort_signatures = dict(self.sort_signatures)
+        self.sort_arities = dict(self.sort_arities)
         self.installed_theories = dict(self.installed_theories)
         self.index = RuleIndex(self.rules)
         self.memo: Dict[Term, Term] = {}
@@ -588,6 +590,7 @@ def make_engine(
     ground_cache: Optional[Dict[Term, Term]] = None,
     schemes: Optional[Dict[str, InductionScheme]] = None,
     sort_signatures: Optional[Dict[str, SortSignature]] = None,
+    sort_arities: Optional[Dict[str, int]] = None,
     installed_theories: Optional[Dict[str, str]] = None,
 ) -> Engine:
     """Construct an ``Engine`` with explicit shared/per-run dependencies."""
@@ -603,6 +606,7 @@ def make_engine(
         ground_cache={} if ground_cache is None else ground_cache,
         schemes={} if schemes is None else schemes,
         sort_signatures=sigs,
+        sort_arities={} if sort_arities is None else dict(sort_arities),
         installed_theories={} if installed_theories is None else dict(installed_theories),
     )
 

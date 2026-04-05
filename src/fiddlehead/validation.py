@@ -50,6 +50,7 @@ def default_sort_signatures() -> Dict[str, SortSignature]:
 
 class EngineLike(Protocol):
     sort_signatures: Dict[str, SortSignature]
+    sort_arities: Dict[str, int]
 
 
 class RuleLike(Protocol):
@@ -133,13 +134,8 @@ def _fresh_type_var(prefix: str, counter: list[int]) -> TypeVar:
     return TypeVar(f"{prefix}_{n}")
 
 
-_ANNOTATED_PARAM_SORT_ARITY: Dict[str, int] = {
-    "List": 1,
-}
-
-
-def _type_from_sort_annotation(sort: str, counter: list[int]) -> TypeTerm:
-    arity = _ANNOTATED_PARAM_SORT_ARITY.get(sort)
+def _type_from_sort_annotation(sort: str, engine: EngineLike, counter: list[int]) -> TypeTerm:
+    arity = engine.sort_arities.get(sort)
     if arity is not None:
         return TypeConst(sort, tuple(_fresh_type_var("s", counter) for _ in range(arity)))
     return TypeConst(sort)
@@ -185,8 +181,10 @@ def _infer_type_inner(
             existing = var_env.get(var)
             if existing is not None:
                 return _apply_type_subst(existing, subst)
-            inferred = _type_from_sort_annotation(sort, counter) if sort is not None else _fresh_type_var(
-                "v", counter
+            inferred = (
+                _type_from_sort_annotation(sort, engine, counter)
+                if sort is not None
+                else _fresh_type_var("v", counter)
             )
             var_env[var] = inferred
             return _apply_type_subst(inferred, subst)

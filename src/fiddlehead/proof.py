@@ -149,6 +149,7 @@ def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause,
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
         sort_signatures=engine.sort_signatures,
+        sort_arities=engine.sort_arities,
     )
     contextual_goal = normalize(base_goal, local_engine)
     stage_clause = Clause(assumptions, contextual_goal)
@@ -172,6 +173,7 @@ def _normalize_with_rules_only(term: Term, engine: Engine) -> Term:
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
         sort_signatures=engine.sort_signatures,
+        sort_arities=engine.sort_arities,
     )
     return normalize(term, base_engine)
 
@@ -430,6 +432,7 @@ def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
         ground_cache=engine.ground_cache,
         schemes=engine.schemes,
         sort_signatures=engine.sort_signatures,
+        sort_arities=engine.sort_arities,
     )
 
 

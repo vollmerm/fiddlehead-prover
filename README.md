@@ -18,11 +18,6 @@ The recommended entrypoint is:
 from fiddlehead import *
 ```
 
-The lower-level module path also works:
-
-```python
-from fiddlehead.prover import *
-```
 ## Examples
 
 ```python
@@ -99,14 +94,6 @@ $ python ./examples/prove_length_append.py
     - induction-branch [solved] :: depth=14 -> eq(length(append(cons(xs_cons_arg_0, xs_ih_0), ys)), add(length(cons(xs_cons_arg_0, xs_ih_0)), length(ys)))
       - simplify -> true
 ```
-
-## Project layout
-
-- `src/fiddlehead/prover.py`: public facade
-- `src/fiddlehead/syntax.py`: terms, variables, substitution, matching
-- `src/fiddlehead/kernel.py`: engine, rewriting, typing, tracing
-- `src/fiddlehead/proof.py`: clauses, proof search, certificates
-- `src/fiddlehead/theory.py`: theories, theorem environments, sessions
 
 ## Installation
 

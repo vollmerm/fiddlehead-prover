@@ -330,6 +330,16 @@ def builtin_rules():
         Rule(App("neq",x,x),false),
         Rule(App("if",true,x,y),x),
         Rule(App("if",false,x,y),y),
+        Rule(App("not", true), false),
+        Rule(App("not", false), true),
+        Rule(App("and", true, x), x),
+        Rule(App("and", false, x), false),
+        Rule(App("and", x, true), x),
+        Rule(App("and", x, false), false),
+        Rule(App("or", true, x), true),
+        Rule(App("or", false, x), x),
+        Rule(App("or", x, true), true),
+        Rule(App("or", x, false), x),
     ]
 
             
@@ -353,9 +363,13 @@ class EngineConfig:
 def default_engine_config() -> EngineConfig:
     return EngineConfig(
         precedence={
+            "mul": 4,
             "add": 3,
             "append": 3,
             "length": 3,
+            "not": 2,
+            "and": 2,
+            "or": 2,
             "S": 2,
             "cons": 2,
             "if": 1,
@@ -389,7 +403,11 @@ def default_sort_signatures() -> Dict[str, SortSignature]:
         "1": SortSignature((), TypeConst("Nat")),
         "true": SortSignature((), TypeConst("Bool")),
         "false": SortSignature((), TypeConst("Bool")),
+        "not": SortSignature((TypeConst("Bool"),), TypeConst("Bool")),
+        "and": SortSignature((TypeConst("Bool"), TypeConst("Bool")), TypeConst("Bool")),
+        "or": SortSignature((TypeConst("Bool"), TypeConst("Bool")), TypeConst("Bool")),
         "S": SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
+        "mul": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
         "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
         "nil": SortSignature((), TypeConst("List", (A,))),
         "cons": SortSignature((A, TypeConst("List", (A,))), TypeConst("List", (A,))),
@@ -2173,7 +2191,11 @@ if __name__ == "__main__":
     one = Const("1")
     
     S = lambda t: App("S", t)
+    mul = lambda a, b: App("mul", a, b)
     add = lambda a, b: App("add", a, b)
+    bnot = lambda a: App("not", a)
+    band = lambda a, b: App("and", a, b)
+    bor = lambda a, b: App("or", a, b)
     nil = Const("nil")
     cons = lambda a, b: App("cons", a, b)
     app = lambda a, b: App("append", a, b)
@@ -2193,8 +2215,10 @@ if __name__ == "__main__":
     r7 = Rule(length(cons(h, t)), S(length(t)))
     r8 = Rule(add(x, zero), x)
     r9 = Rule(add(x, S(y)), S(add(x, y)))
+    r10 = Rule(mul(zero, y), zero)
+    r11 = Rule(mul(S(x), y), add(y, mul(x, y)))
 
-    rules = builtin_rules() + [r1, r2, r3, r4, r5, r6, r7, r8, r9]
+    rules = builtin_rules() + [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11]
     shared_cache: Dict[Term, Term] = {}
     shared_schemes: Dict[str, InductionScheme] = {}
     shared_sort_signatures = default_sort_signatures()
@@ -2277,6 +2301,7 @@ if __name__ == "__main__":
     # Test 14: induction obligations for nat produce base + step (with IH)
     nat_scheme = nat_induction_scheme(zero)
     list_scheme = list_induction_scheme()
+    bool_scheme = InductionScheme(name="bool", sort="Bool", base_terms=(true, false), constructors=())
     clause4 = Clause((), eq(add(x, zero), x))
     branches = induction_branches(clause4, x, nat_scheme)
     assert len(branches) == 2
@@ -2301,6 +2326,7 @@ if __name__ == "__main__":
     # Test 18: scheme registry lookup and proof
     register_induction_scheme(engine, nat_scheme)
     register_induction_scheme(engine, list_scheme)
+    register_induction_scheme(engine, bool_scheme)
     assert get_induction_scheme(engine, "nat") is nat_scheme
     assert get_induction_scheme_for_sort(engine, "List") is list_scheme
     assert prove_with_registered_induction(clause4, engine, x_nat, "nat", depth=8, induction_depth=1)
@@ -2739,6 +2765,25 @@ if __name__ == "__main__":
     install_env_d = get_theorem_environment(install_engine_d)
     assert "theory:bad.atomic" not in install_env_d.scoped_rule_sets
     assert "atomic_scope" not in install_env_d.scoped_rule_sets
+
+    # Test 56: multiplication supports induction proofs over Nat
+    mul_zero_goal = Clause((), eq(mul(x_nat, zero), zero))
+    assert prove_with_registered_induction(mul_zero_goal, engine, x_nat, "nat", depth=12, induction_depth=1)
+
+    # Test 57: multiplication distributes over successor in second argument
+    mul_succ_goal = Clause((), eq(mul(x_nat, S(y_nat)), add(x_nat, mul(x_nat, y_nat))))
+    assert prove_with_registered_induction(mul_succ_goal, engine, x_nat, "nat", depth=16, induction_depth=1)
+
+    # Test 58: boolean operators normalize correctly
+    assert normalize(bnot(true), engine) == false
+    assert normalize(band(true, false), engine) == false
+    assert normalize(bor(false, true), engine) == true
+
+    # Test 59: De Morgan's law for booleans
+    x_bool = V("xb", "Bool")
+    y_bool = V("yb", "Bool")
+    demorgan_goal = Clause((), eq(bnot(band(x_bool, y_bool)), bor(bnot(x_bool), bnot(y_bool))))
+    assert prove_with_registered_induction(demorgan_goal, engine, x_bool, "bool", depth=12, induction_depth=1)
 
     print("\nAppend associativity proof trace:")
     print(rendered)

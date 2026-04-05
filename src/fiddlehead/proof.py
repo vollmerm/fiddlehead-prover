@@ -7,18 +7,16 @@ from .kernel import (
     Context,
     Engine,
     InductionScheme,
-    ProofNode,
-    ProofTrace,
     Rule,
-    _new_node,
     _term_key,
-    _validate_clause_sorts,
     get_induction_scheme,
     make_engine,
     normalize,
     var_matches_scheme,
 )
-from .syntax import App, Term, Var, apply_subst, true
+from .syntax import App, Fun, Term, V, Var, apply_subst, true
+from .trace import ProofNode, ProofTrace, _new_node
+from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 
 @dataclass(frozen=True)
@@ -31,10 +29,13 @@ def vars_in_term(term: Term) -> set[str]:
     match term:
         case Var(name, _):
             return {name}
+        case Fun(_, _):
+            names: set[str] = set()
+            for arg in term.args:
+                names |= vars_in_term(arg)
+            return names
         case _:
             names: set[str] = set()
-            for arg in getattr(term, "args", ()):
-                names |= vars_in_term(arg)
             return names
 
 
@@ -53,8 +54,7 @@ def instantiate_clause(clause: Clause, subst: dict[Var, Term]) -> Clause:
 
 def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
     match goal:
-        case _ if getattr(goal, "symbol", None) == "eq" and len(getattr(goal, "args", ())) == 2:
-            left, right = goal.args
+        case Fun("eq", (left, right)):
             return left, right
     return None
 
@@ -66,8 +66,6 @@ def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Va
         counter += 1
         candidate = f"{base}_{counter}"
     used_names.add(candidate)
-    from .syntax import V
-
     return V(candidate, sort)
 
 
@@ -183,21 +181,21 @@ def clause_solved(clause: Clause) -> bool:
 
 
 def split_clause(clause: Clause) -> list[Clause]:
-    goal = clause.goal
-    if getattr(goal, "symbol", None) != "if" or len(getattr(goal, "args", ())) != 3:
-        return [clause]
-
-    cond, then_branch, else_branch = goal.args
-    if getattr(cond, "symbol", None) == "eq" and len(getattr(cond, "args", ())) == 2:
-        left, right = cond.args
-        return [
-            Clause(clause.assumptions + ((left, right),), then_branch),
-            Clause(clause.assumptions, else_branch),
-        ]
-    return [
-        Clause(clause.assumptions, then_branch),
-        Clause(clause.assumptions, else_branch),
-    ]
+    match clause.goal:
+        case Fun("if", (cond, then_branch, else_branch)):
+            match cond:
+                case Fun("eq", (left, right)):
+                    return [
+                        Clause(clause.assumptions + ((left, right),), then_branch),
+                        Clause(clause.assumptions, else_branch),
+                    ]
+                case _:
+                    return [
+                        Clause(clause.assumptions, then_branch),
+                        Clause(clause.assumptions, else_branch),
+                    ]
+        case _:
+            return [clause]
 
 
 def _prove_kernel(
@@ -436,8 +434,6 @@ def _check_exact_step(clause: Clause, engine: Engine) -> Clause:
 
 
 def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
-    from .kernel import _validate_rule_sorts
-
     _validate_rule_sorts(rule, engine, "rewrite step")
     local = _local_engine_for_clause(clause, engine)
     rewritten = local.rewrite_once(clause.goal, rule)

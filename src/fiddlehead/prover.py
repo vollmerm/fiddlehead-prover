@@ -37,12 +37,9 @@ from .kernel import (
     Fun,
     InductionConstructor,
     InductionScheme,
-    ProofNode,
-    ProofTrace,
     Rule,
     SortSignature,
     Term,
-    Trace,
     TypeConst,
     TypeTerm,
     TypeVar,
@@ -61,7 +58,6 @@ from .kernel import (
     normalize,
     register_induction_scheme,
     register_sort_signature,
-    render_proof_trace,
 )
 from .proof import (
     Clause,
@@ -77,10 +73,11 @@ from .proof import (
     prove_with_trace,
     simplify_clause,
 )
+from .session import ProofSession
 from .syntax import App, Const, V, apply_subst, false, match, reset_var_interner, true
+from .trace import ProofNode, ProofTrace, Trace, render_proof_trace
 from .theory import (
     Lemma,
-    ProofSession,
     TheoremEnvironment,
     Theory,
     get_theorem_environment,

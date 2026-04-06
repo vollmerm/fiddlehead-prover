@@ -145,7 +145,9 @@ def _lpo_greater(config: EngineConfig, left: Term, right: Term) -> bool:
         case Var(), Fun():
             return False
         case Fun(left_symbol, left_args), Fun(right_symbol, right_args):
-            if any(_lpo_greater(config, arg, right) or arg is right for arg in left_args):
+            if any(
+                _lpo_greater(config, arg, right) or arg is right for arg in left_args
+            ):
                 return True
             if _prec(config, left_symbol) > _prec(config, right_symbol) and all(
                 _lpo_greater(config, left, arg) for arg in right_args
@@ -226,9 +228,9 @@ class EqClasses:
 
         if self.rank[root_left] < self.rank[root_right]:
             root_left, root_right = root_right, root_left
-        elif self.rank[root_left] == self.rank[root_right] and _term_key(root_right) < _term_key(
-            root_left
-        ):
+        elif self.rank[root_left] == self.rank[root_right] and _term_key(
+            root_right
+        ) < _term_key(root_left):
             root_left, root_right = root_right, root_left
 
         self.parent[root_right] = root_left
@@ -306,7 +308,9 @@ def _ac_normalize(config: EngineConfig, term: Term) -> Term:
 
             def collect(current: Term) -> None:
                 match current:
-                    case Fun(inner_symbol, (inner_left, inner_right)) if inner_symbol == symbol:
+                    case Fun(inner_symbol, (inner_left, inner_right)) if (
+                        inner_symbol == symbol
+                    ):
                         collect(inner_left)
                         collect(inner_right)
                     case _:
@@ -354,7 +358,9 @@ class InductionScheme:
     constructors: Tuple[InductionConstructor, ...]
 
 
-def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") -> InductionScheme:
+def nat_induction_scheme(
+    zero: Optional[Term] = None, succ_symbol: str = "S"
+) -> InductionScheme:
     """Build the standard unary natural-number induction scheme."""
 
     if zero is None:
@@ -367,7 +373,9 @@ def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") ->
     )
 
 
-def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") -> InductionScheme:
+def list_induction_scheme(
+    nil_symbol: str = "nil", cons_symbol: str = "cons"
+) -> InductionScheme:
     """Build the standard list induction scheme."""
 
     return InductionScheme(
@@ -375,6 +383,19 @@ def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") ->
         sort="List",
         base_terms=(Const(nil_symbol),),
         constructors=(InductionConstructor(cons_symbol, 2, (1,)),),
+    )
+
+
+def map_induction_scheme(
+    empty_symbol: str = "empty", put_symbol: str = "put"
+) -> InductionScheme:
+    """Build the standard map induction scheme."""
+
+    return InductionScheme(
+        name="map",
+        sort="Map",
+        base_terms=(Const(empty_symbol),),
+        constructors=(InductionConstructor(put_symbol, 3, (0,)),),
     )
 
 
@@ -393,7 +414,9 @@ class Engine:
     config: EngineConfig = field(default_factory=default_engine_config)
     ground_cache: Dict[Term, Term] = field(default_factory=dict)
     schemes: Dict[str, InductionScheme] = field(default_factory=dict)
-    sort_signatures: Dict[str, SortSignature] = field(default_factory=default_sort_signatures)
+    sort_signatures: Dict[str, SortSignature] = field(
+        default_factory=default_sort_signatures
+    )
     sort_arities: Dict[str, int] = field(default_factory=dict)
     installed_theories: Dict[str, str] = field(default_factory=dict)
     theory: TheoremEnvironment | None = None
@@ -437,13 +460,19 @@ class Engine:
         if eq_classes is None:
             raise RuntimeError("Equation classes were not initialized.")
         for ctx_left, ctx_right in self.ctx.disequalities:
-            if eq_classes.are_equal(left, ctx_left) and eq_classes.are_equal(right, ctx_right):
+            if eq_classes.are_equal(left, ctx_left) and eq_classes.are_equal(
+                right, ctx_right
+            ):
                 return True
-            if eq_classes.are_equal(left, ctx_right) and eq_classes.are_equal(right, ctx_left):
+            if eq_classes.are_equal(left, ctx_right) and eq_classes.are_equal(
+                right, ctx_left
+            ):
                 return True
         return False
 
-    def conditions_hold(self, conditions: Tuple[Tuple[Term, Term], ...], subst: Dict[Var, Term]) -> bool:
+    def conditions_hold(
+        self, conditions: Tuple[Tuple[Term, Term], ...], subst: Dict[Var, Term]
+    ) -> bool:
         for left, right in conditions:
             if not self.holds(apply_subst(left, subst), apply_subst(right, subst)):
                 return False
@@ -607,6 +636,7 @@ class Engine:
     def get_sort_signature(self, symbol: str) -> Optional[SortSignature]:
         return self.sort_signatures.get(symbol)
 
+
 def make_engine(
     rules: list[Rule],
     ctx: Context = Context(),
@@ -622,7 +652,9 @@ def make_engine(
     """Construct an ``Engine`` with explicit shared/per-run dependencies."""
 
     cfg = default_engine_config() if config is None else config
-    sigs = default_sort_signatures() if sort_signatures is None else dict(sort_signatures)
+    sigs = (
+        default_sort_signatures() if sort_signatures is None else dict(sort_signatures)
+    )
     return Engine(
         rules=rules,
         ctx=ctx,
@@ -633,7 +665,9 @@ def make_engine(
         schemes={} if schemes is None else schemes,
         sort_signatures=sigs,
         sort_arities={} if sort_arities is None else dict(sort_arities),
-        installed_theories={} if installed_theories is None else dict(installed_theories),
+        installed_theories={}
+        if installed_theories is None
+        else dict(installed_theories),
     )
 
 
@@ -655,13 +689,17 @@ def get_induction_scheme(engine: Engine, name: str) -> Optional[InductionScheme]
     return engine.get_scheme(name)
 
 
-def get_induction_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
+def get_induction_scheme_for_sort(
+    engine: Engine, sort: str
+) -> Optional[InductionScheme]:
     """Return a registered induction scheme compatible with ``sort``."""
 
     return engine.get_scheme_for_sort(sort)
 
 
-def register_sort_signature(engine: Engine, symbol: str, signature: SortSignature) -> None:
+def register_sort_signature(
+    engine: Engine, symbol: str, signature: SortSignature
+) -> None:
     """Register a symbol sort signature on an engine."""
 
     engine.register_sort_signature(symbol, signature)

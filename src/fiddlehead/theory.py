@@ -28,6 +28,7 @@ from .kernel import (
     nat_induction_scheme,
     register_induction_scheme,
     register_sort_signature,
+    tree_induction_scheme,
     var_matches_scheme,
 )
 from .proof import (
@@ -229,6 +230,32 @@ def map_theory(name: str = "core.map", version: str = "1.0.0") -> Theory:
             ),
         ),
         precedence={"put": 2, "get": 2},
+    )
+
+
+def tree_theory(name: str = "core.tree", version: str = "1.0.0") -> Theory:
+    """Return a binary-tree theory with leaf/node constructors."""
+
+    a = TypeVar("A")
+    left = V("tree_l", "Tree")
+    val = V("tree_v")
+    right = V("tree_r", "Tree")
+
+    return Theory(
+        name=name,
+        version=version,
+        depends_on=("core.nat",),
+        sort_arities={"Tree": 1},
+        sort_signatures={
+            "leaf": SortSignature((), TypeConst("Tree", (a,))),
+            "node": SortSignature(
+                (TypeConst("Tree", (a,)), a, TypeConst("Tree", (a,))),
+                TypeConst("Tree", (a,)),
+            ),
+        },
+        rules=(),
+        schemes=(tree_induction_scheme(),),
+        precedence={"leaf": 1, "node": 1},
     )
 
 

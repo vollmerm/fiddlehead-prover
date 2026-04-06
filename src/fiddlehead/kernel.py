@@ -399,6 +399,19 @@ def map_induction_scheme(
     )
 
 
+def tree_induction_scheme(
+    leaf_symbol: str = "leaf", node_symbol: str = "node"
+) -> InductionScheme:
+    """Build the standard binary-tree induction scheme."""
+
+    return InductionScheme(
+        name="tree",
+        sort="Tree",
+        base_terms=(Const(leaf_symbol),),
+        constructors=(InductionConstructor(node_symbol, 3, (0,)),),
+    )
+
+
 def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
     return var.sort is None or var.sort == scheme.sort
 

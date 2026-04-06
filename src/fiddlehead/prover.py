@@ -59,6 +59,7 @@ from .kernel import (
     normalize,
     register_induction_scheme,
     register_sort_signature,
+    tree_induction_scheme,
 )
 from .proof import (
     Clause,
@@ -88,6 +89,7 @@ from .theory import (
     map_theory,
     nat_theory,
     theory_from_module,
+    tree_theory,
 )
 
 __all__ = [
@@ -111,9 +113,11 @@ __all__ = [
     "nat_induction_scheme",
     "list_induction_scheme",
     "map_induction_scheme",
+    "tree_induction_scheme",
     "nat_theory",
     "list_theory",
     "map_theory",
+    "tree_theory",
     "register_induction_scheme",
     "get_induction_scheme",
     "get_induction_scheme_for_sort",

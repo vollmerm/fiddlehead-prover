@@ -426,12 +426,22 @@ class Engine:
         eq_classes = self.eq_classes
         if eq_classes is None:
             raise RuntimeError("Equation classes were not initialized.")
+        if self._disequal(left, right):
+            return False
+        return eq_classes.are_equal(left, right)
+
+    def _disequal(self, left: Term, right: Term) -> bool:
+        self._ensure_eq_classes(left)
+        self._ensure_eq_classes(right)
+        eq_classes = self.eq_classes
+        if eq_classes is None:
+            raise RuntimeError("Equation classes were not initialized.")
         for ctx_left, ctx_right in self.ctx.disequalities:
             if eq_classes.are_equal(left, ctx_left) and eq_classes.are_equal(right, ctx_right):
-                return False
+                return True
             if eq_classes.are_equal(left, ctx_right) and eq_classes.are_equal(right, ctx_left):
-                return False
-        return eq_classes.are_equal(left, right)
+                return True
+        return False
 
     def conditions_hold(self, conditions: Tuple[Tuple[Term, Term], ...], subst: Dict[Var, Term]) -> bool:
         for left, right in conditions:
@@ -472,6 +482,22 @@ class Engine:
 
         term = _ac_normalize(self.config, term)
         term = self.eq_classes.canonical(term)
+
+        match term:
+            case Fun("eq", (left, right)):
+                if self.eq_classes.are_equal(left, right):
+                    self.memo[term] = true
+                    return true
+                if self._disequal(left, right):
+                    self.memo[term] = false
+                    return false
+            case Fun("neq", (left, right)):
+                if self.eq_classes.are_equal(left, right):
+                    self.memo[term] = false
+                    return false
+                if self._disequal(left, right):
+                    self.memo[term] = true
+                    return true
 
         for rule in self.index.get(term):
             rewritten = self.rewrite_once(term, rule)

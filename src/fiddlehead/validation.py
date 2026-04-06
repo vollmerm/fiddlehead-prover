@@ -69,6 +69,9 @@ class ClauseLike(Protocol):
     def assumptions(self) -> Tuple[Tuple[Term, Term], ...]: ...
 
     @property
+    def disequalities(self) -> Tuple[Tuple[Term, Term], ...]: ...
+
+    @property
     def goal(self) -> Term: ...
 
 
@@ -266,3 +269,5 @@ def _validate_clause_sorts(clause: ClauseLike, engine: EngineLike, where: str) -
     infer_type(clause.goal, engine)
     for index, (left, right) in enumerate(clause.assumptions):
         _validate_equality_pair(left, right, engine, f"{where} assumption[{index}]")
+    for index, (left, right) in enumerate(clause.disequalities):
+        _validate_equality_pair(left, right, engine, f"{where} disequality[{index}]")

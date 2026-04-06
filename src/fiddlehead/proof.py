@@ -21,17 +21,18 @@ from .kernel import (
     normalize,
     var_matches_scheme,
 )
-from .syntax import App, Fun, Term, V, Var, apply_subst, true
+from .syntax import App, Fun, Term, V, Var, apply_subst, false, true
 from .trace import ProofNode, ProofTrace, _new_node
 from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 
 @dataclass(frozen=True)
 class Clause:
-    """A goal with equational assumptions."""
+    """A goal with local equality and disequality assumptions."""
 
     assumptions: Tuple[Tuple[Term, Term], ...]
     goal: Term
+    disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
 
 def vars_in_term(term: Term) -> set[str]:
@@ -55,6 +56,9 @@ def vars_in_clause(clause: Clause) -> set[str]:
     for left, right in clause.assumptions:
         names |= vars_in_term(left)
         names |= vars_in_term(right)
+    for left, right in clause.disequalities:
+        names |= vars_in_term(left)
+        names |= vars_in_term(right)
     return names
 
 
@@ -62,7 +66,11 @@ def instantiate_clause(clause: Clause, subst: dict[Var, Term]) -> Clause:
     """Apply a substitution across assumptions and goal."""
 
     assumptions = tuple((apply_subst(left, subst), apply_subst(right, subst)) for left, right in clause.assumptions)
-    return Clause(assumptions, apply_subst(clause.goal, subst))
+    disequalities = tuple(
+        (apply_subst(left, subst), apply_subst(right, subst))
+        for left, right in clause.disequalities
+    )
+    return Clause(assumptions, apply_subst(clause.goal, subst), disequalities)
 
 
 def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
@@ -114,7 +122,13 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
 
         step_term = App(constructor.symbol, *args)
         step_clause = instantiate_clause(clause, {var: step_term})
-        branches.append(Clause(step_clause.assumptions + tuple(ih_assumptions), step_clause.goal))
+        branches.append(
+            Clause(
+                step_clause.assumptions + tuple(ih_assumptions),
+                step_clause.goal,
+                step_clause.disequalities,
+            )
+        )
 
     return branches
 
@@ -133,16 +147,17 @@ def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause,
     _validate_clause_sorts(clause, engine, "clause")
 
     assumptions = _simplify_assumptions(clause.assumptions, engine)
-    stage_clause = Clause(assumptions, clause.goal)
+    disequalities = _simplify_disequalities(clause.disequalities, engine)
+    stage_clause = Clause(assumptions, clause.goal, disequalities)
     stages.append(("assumptions", stage_clause))
 
     base_goal = _normalize_with_rules_only(stage_clause.goal, engine)
-    stage_clause = Clause(assumptions, base_goal)
+    stage_clause = Clause(assumptions, base_goal, disequalities)
     stages.append(("rule-goal", stage_clause))
 
     local_engine = make_engine(
         rules=engine.rules,
-        ctx=Context(assumptions),
+        ctx=Context(assumptions, disequalities),
         trace=engine.trace,
         fuel=engine.fuel,
         config=engine.config,
@@ -152,12 +167,12 @@ def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause,
         sort_arities=engine.sort_arities,
     )
     contextual_goal = normalize(base_goal, local_engine)
-    stage_clause = Clause(assumptions, contextual_goal)
+    stage_clause = Clause(assumptions, contextual_goal, disequalities)
     stages.append(("context-goal", stage_clause))
 
     eq_goal = goal_equality(contextual_goal)
     if eq_goal is not None and local_engine.holds(eq_goal[0], eq_goal[1]):
-        stage_clause = Clause(assumptions, true)
+        stage_clause = Clause(assumptions, true, disequalities)
         stages.append(("context-solved", stage_clause))
 
     return stage_clause, stages
@@ -201,6 +216,27 @@ def _simplify_assumptions(
     return tuple(out)
 
 
+def _simplify_disequalities(
+    disequalities: Tuple[Tuple[Term, Term], ...],
+    engine: Engine,
+) -> Tuple[Tuple[Term, Term], ...]:
+    seen: set[tuple[Term, Term]] = set()
+    out: list[tuple[Term, Term]] = []
+    for left, right in disequalities:
+        left_norm = _normalize_with_rules_only(left, engine)
+        right_norm = _normalize_with_rules_only(right, engine)
+        pair = (
+            (left_norm, right_norm)
+            if _term_key(left_norm) <= _term_key(right_norm)
+            else (right_norm, left_norm)
+        )
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return tuple(out)
+
+
 def clause_solved(clause: Clause) -> bool:
     """Return whether the clause is discharged (goal is ``true``)."""
 
@@ -215,13 +251,29 @@ def split_clause(clause: Clause) -> list[Clause]:
             match cond:
                 case Fun("eq", (left, right)):
                     return [
-                        Clause(clause.assumptions + ((left, right),), then_branch),
-                        Clause(clause.assumptions, else_branch),
+                        Clause(
+                            clause.assumptions + ((left, right),),
+                            then_branch,
+                            clause.disequalities,
+                        ),
+                        Clause(
+                            clause.assumptions,
+                            else_branch,
+                            clause.disequalities + ((left, right),),
+                        ),
                     ]
                 case _:
                     return [
-                        Clause(clause.assumptions, then_branch),
-                        Clause(clause.assumptions, else_branch),
+                        Clause(
+                            clause.assumptions + ((cond, true),),
+                            then_branch,
+                            clause.disequalities,
+                        ),
+                        Clause(
+                            clause.assumptions + ((cond, false),),
+                            else_branch,
+                            clause.disequalities,
+                        ),
                     ]
         case _:
             return [clause]
@@ -425,7 +477,7 @@ class ProofCertificate:
 def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
     return make_engine(
         rules=engine.rules,
-        ctx=Context(clause.assumptions, ()),
+        ctx=Context(clause.assumptions, clause.disequalities),
         trace=engine.trace,
         fuel=engine.fuel,
         config=engine.config,
@@ -469,7 +521,7 @@ def _goal_holds_in_assumptions(clause: Clause, engine: Engine) -> bool:
 
 def _check_exact_step(clause: Clause, engine: Engine) -> Clause:
     if clause_solved(clause) or _goal_holds_in_assumptions(clause, engine):
-        return Clause(clause.assumptions, true)
+        return Clause(clause.assumptions, true, clause.disequalities)
     raise ValueError("Goal is not solved and does not follow from assumptions.")
 
 
@@ -479,7 +531,7 @@ def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
     rewritten = local.rewrite_once(clause.goal, rule)
     if rewritten is None:
         raise ValueError("Rewrite rule does not apply to current goal.")
-    out = Clause(clause.assumptions, rewritten)
+    out = Clause(clause.assumptions, rewritten, clause.disequalities)
     _validate_clause_sorts(out, engine, "rewrite result")
     return out
 

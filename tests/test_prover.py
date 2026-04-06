@@ -5,6 +5,7 @@ from typing import Dict
 import pytest
 
 from fiddlehead.prover import *
+from fiddlehead.proof import split_clause
 
 
 @pytest.fixture
@@ -152,6 +153,36 @@ def test_trace_clause_and_cache_basics(env):
 
     clause3 = Clause(((x, y), (y, zero)), eq(x, zero))
     assert clause_solved(simplify_clause(clause3, engine))
+
+
+def test_disequality_simplification_and_split_branch_contexts(env):
+    x = env["x"]
+    y = env["y"]
+    eq = env["eq"]
+    neq = env["neq"]
+    engine = env["engine"]
+
+    diseq_clause = Clause((), neq(x, y), ((x, y),))
+    assert simplify_clause(diseq_clause, engine).goal == true
+    eq_clause = Clause((), eq(x, y), ((x, y),))
+    assert simplify_clause(eq_clause, engine).goal == false
+
+    eq_cond_clause = Clause((), App("if", eq(x, y), true, false))
+    eq_branches = split_clause(eq_cond_clause)
+    assert len(eq_branches) == 2
+    assert eq_branches[0].assumptions == ((x, y),)
+    assert eq_branches[0].disequalities == ()
+    assert eq_branches[1].assumptions == ()
+    assert eq_branches[1].disequalities == ((x, y),)
+
+    cond = neq(x, y)
+    bool_cond_clause = Clause((), App("if", cond, x, y))
+    bool_branches = split_clause(bool_cond_clause)
+    assert len(bool_branches) == 2
+    assert bool_branches[0].assumptions == ((cond, true),)
+    assert bool_branches[0].disequalities == ()
+    assert bool_branches[1].assumptions == ((cond, false),)
+    assert bool_branches[1].disequalities == ()
 
 
 def test_builtin_rules_do_not_claim_common_variable_names():
@@ -366,7 +397,7 @@ def test_traces_certificates_and_sessions(env):
 
     bad_cert = ProofCertificate(
         clause=cert.clause,
-        simplified=Clause(cert.simplified.assumptions, false),
+        simplified=Clause(cert.simplified.assumptions, false, cert.simplified.disequalities),
         step=cert.step,
         children=cert.children,
         var=cert.var,

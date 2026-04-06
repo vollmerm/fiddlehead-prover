@@ -499,6 +499,10 @@ class TheoremEnvironment:
             raise ValueError(
                 "Only assumption-free lemmas can be registered in this minimal environment."
             )
+        if lemma.clause.disequalities:
+            raise ValueError(
+                "Only disequality-free lemmas can be registered in this minimal environment."
+            )
         if goal_equality(lemma.clause.goal) is None:
             raise ValueError("Lemma goal must be an equality.")
         _validate_clause_sorts(lemma.clause, self.engine, f"lemma {lemma.name}")

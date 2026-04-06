@@ -483,6 +483,7 @@ class Clause:
     """A proof obligation: assumptions imply a goal term."""
     assumptions: Tuple[Tuple[Term, Term], ...]
     goal: Term
+    disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -589,12 +590,18 @@ def _holds_with(
     l2 = _normalize_with(l, rules, rule_index, ctx, trace, fuel, config)
     r2 = _normalize_with(r, rules, rule_index, ctx, trace, fuel, config)
     eq = _build_eq_classes(ctx, (l2, r2))
-    for a, b in ctx.disequalities:
-        if eq.are_equal(l2, a) and eq.are_equal(r2, b):
-            return False
-        if eq.are_equal(l2, b) and eq.are_equal(r2, a):
-            return False
+    if _disequal_with(l2, r2, ctx, eq):
+        return False
     return eq.are_equal(l2, r2)
+
+
+def _disequal_with(left: Term, right: Term, ctx: Context, eq: EqClasses) -> bool:
+    for ctx_left, ctx_right in ctx.disequalities:
+        if eq.are_equal(left, ctx_left) and eq.are_equal(right, ctx_right):
+            return True
+        if eq.are_equal(left, ctx_right) and eq.are_equal(right, ctx_left):
+            return True
+    return False
 
 
 def _conditions_hold(
@@ -667,6 +674,18 @@ def _rewrite_term(
 
     term = _ac_normalize(config, term)
     term = eq.canonical(term)
+
+    match term:
+        case Fun("eq", (left, right)):
+            if eq.are_equal(left, right):
+                return true
+            if _disequal_with(left, right, ctx, eq):
+                return false
+        case Fun("neq", (left, right)):
+            if eq.are_equal(left, right):
+                return false
+            if _disequal_with(left, right, ctx, eq):
+                return true
 
     for r in rule_index.get(term):
         t2 = _rewrite_once(term, r, rules, rule_index, ctx, trace, fuel, config)
@@ -768,14 +787,18 @@ def vars_in_clause(clause: Clause) -> set[str]:
     for l, r in clause.assumptions:
         out |= vars_in_term(l)
         out |= vars_in_term(r)
+    for l, r in clause.disequalities:
+        out |= vars_in_term(l)
+        out |= vars_in_term(r)
     return out
 
 
 def instantiate_clause(clause: Clause, subst: Subst) -> Clause:
     """Apply a substitution to both assumptions and goal of a clause."""
     assumptions = tuple((apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.assumptions)
+    disequalities = tuple((apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.disequalities)
     goal = apply_subst(clause.goal, subst)
-    return Clause(assumptions, goal)
+    return Clause(assumptions, goal, disequalities)
 
 
 def goal_equality(goal: Term) -> Optional[Tuple[Term, Term]]:
@@ -828,14 +851,20 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
 
         step_term = App(cons.symbol, *args)
         step_clause = instantiate_clause(clause, {var: step_term})
-        branches.append(Clause(step_clause.assumptions + tuple(ih_assumptions), step_clause.goal))
+        branches.append(
+            Clause(
+                step_clause.assumptions + tuple(ih_assumptions),
+                step_clause.goal,
+                step_clause.disequalities,
+            )
+        )
 
     return branches
 
 
 def simplify_clause(clause: Clause) -> Clause:
     """Normalize a clause goal under the clause assumptions as local context."""
-    local_ctx = Context(clause.assumptions)
+    local_ctx = Context(clause.assumptions, clause.disequalities)
     new_goal = _normalize_with(
         clause.goal,
         GLOBAL_RULES,
@@ -845,7 +874,7 @@ def simplify_clause(clause: Clause) -> Clause:
         GLOBAL_FUEL,
         GLOBAL_CONFIG,
     )
-    return Clause(clause.assumptions, new_goal)
+    return Clause(clause.assumptions, new_goal, clause.disequalities)
 
 
 def clause_solved(clause: Clause) -> bool:
@@ -857,16 +886,32 @@ def split_clause(clause: Clause) -> list[Clause]:
     """
     Split conditional goals.
 
-    `if(eq(a,b), t, e)` yields two branches, adding `a=b` to the then branch.
+    `if(eq(a,b), t, e)` adds `a=b` on the then branch and `a!=b` on the else branch.
+    Other booleans branch with `cond=true` and `cond=false`.
     """
     match clause.goal:
         case Fun("if", (cond, then_branch, else_branch)):
             match cond:
                 case Fun("eq", (left, right)):
                     then_assumptions = clause.assumptions + ((left, right),)
-                    return [Clause(then_assumptions, then_branch), Clause(clause.assumptions, else_branch)]
+                    else_disequalities = clause.disequalities + ((left, right),)
+                    return [
+                        Clause(then_assumptions, then_branch, clause.disequalities),
+                        Clause(clause.assumptions, else_branch, else_disequalities),
+                    ]
                 case _:
-                    return [Clause(clause.assumptions, then_branch), Clause(clause.assumptions, else_branch)]
+                    return [
+                        Clause(
+                            clause.assumptions + ((cond, true),),
+                            then_branch,
+                            clause.disequalities,
+                        ),
+                        Clause(
+                            clause.assumptions + ((cond, false),),
+                            else_branch,
+                            clause.disequalities,
+                        ),
+                    ]
         case _:
             return [clause]
 

@@ -75,7 +75,7 @@ class ProofSession:
             if index < 0 or index >= len(assumptions):
                 raise ValueError(f"Assumption index out of range: {index}")
             chosen.append(assumptions[index])
-        next_goal = Clause(tuple(chosen), goal.goal)
+        next_goal = Clause(tuple(chosen), goal.goal, goal.disequalities)
         self._record(
             "session-keep-assumptions",
             goal,
@@ -223,7 +223,11 @@ class ProofSession:
         eq_goal = goal_equality(lemma.clause.goal)
         if eq_goal is None:
             raise ValueError(f"Lemma {name} does not have an equality goal.")
-        next_goal = Clause(original.assumptions + (eq_goal,), original.goal)
+        next_goal = Clause(
+            original.assumptions + (eq_goal,),
+            original.goal,
+            original.disequalities,
+        )
         self._record(
             "session-apply-lemma",
             original,
@@ -257,18 +261,26 @@ class ProofSession:
         """Activate a theorem scope and sync engine rules."""
 
         self.theory.activate_scope(name)
-        self._record("session-activate-scope", self.current_goal() or Clause((), true), note=name)
+        self._record(
+            "session-activate-scope",
+            self.current_goal() or Clause((), true, ()),
+            note=name,
+        )
 
     def deactivate_scope(self, name: str) -> None:
         """Deactivate a theorem scope and sync engine rules."""
 
         self.theory.deactivate_scope(name)
-        self._record("session-deactivate-scope", self.current_goal() or Clause((), true), note=name)
+        self._record(
+            "session-deactivate-scope",
+            self.current_goal() or Clause((), true, ()),
+            note=name,
+        )
 
     def qed(self) -> bool:
         """Return whether all goals are discharged."""
 
         done = not self.goals
-        current = self.current_goal() or Clause((), true)
+        current = self.current_goal() or Clause((), true, ())
         self._record("session-qed", current, solved=done)
         return done

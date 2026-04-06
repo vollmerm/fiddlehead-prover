@@ -227,10 +227,14 @@ def test_induction_branches_and_proofs(env):
     assert str(ih_l) == "add(x_ih_0, 0)"
     assert str(ih_r) == "x_ih_0"
 
-    assert prove_with_induction(clause4, engine, x, nat_scheme, depth=8, induction_depth=1)
+    assert prove_with_induction(
+        clause4, engine, x, nat_scheme, depth=8, induction_depth=1
+    )
     bad = Clause((), eq(add(zero, one), zero))
     assert not prove(bad, engine, depth=8)
-    assert not prove_with_induction(clause4, engine, xs, nat_scheme, depth=8, induction_depth=1)
+    assert not prove_with_induction(
+        clause4, engine, xs, nat_scheme, depth=8, induction_depth=1
+    )
     assert not induction_branches(clause4, xs, nat_scheme)
 
     register_induction_scheme(engine, bool_scheme)
@@ -397,7 +401,9 @@ def test_traces_certificates_and_sessions(env):
 
     bad_cert = ProofCertificate(
         clause=cert.clause,
-        simplified=Clause(cert.simplified.assumptions, false, cert.simplified.disequalities),
+        simplified=Clause(
+            cert.simplified.assumptions, false, cert.simplified.disequalities
+        ),
         step=cert.step,
         children=cert.children,
         var=cert.var,
@@ -414,7 +420,9 @@ def test_traces_certificates_and_sessions(env):
     assert sess.qed()
 
     lemma = Lemma("add_right_id", clause4, cert)
-    sess2 = ProofSession(Clause((), eq(add(App("S", zero), zero), App("S", zero))), engine)
+    sess2 = ProofSession(
+        Clause((), eq(add(App("S", zero), zero), App("S", zero))), engine
+    )
     sess2.register_lemma(lemma, depth=8, induction_depth=1)
     sess2.apply_lemma("add_right_id")
     sess2.simp()
@@ -460,7 +468,12 @@ def test_theorem_scopes_and_tactics(env):
 
     scoped_clause = Clause((), eq(app(xs, nil), xs))
     ok_scoped_cert, scoped_cert = prove_checked(
-        scoped_clause, scoped_engine, depth=10, var=xs, scheme=scoped_list, induction_depth=1
+        scoped_clause,
+        scoped_engine,
+        depth=10,
+        var=xs,
+        scheme=scoped_list,
+        induction_depth=1,
     )
     assert ok_scoped_cert and scoped_cert is not None
     scoped_lemma = Lemma("append_right_id_scoped", scoped_clause, scoped_cert)
@@ -475,7 +488,9 @@ def test_theorem_scopes_and_tactics(env):
     assert str(normalize(app(xs, nil), scoped_engine)) == "append(xs, nil)"
 
     register_sort_signature(scoped_engine, "double", SortSignature(("Nat",), "Nat"))
-    scoped_theory.register_definition("double", App("double", x), add(x, x), scope="def_scope")
+    scoped_theory.register_definition(
+        "double", App("double", x), add(x, x), scope="def_scope"
+    )
     scoped_theory.activate_scope("def_scope")
     assert str(normalize(App("double", App("S", zero)), scoped_engine)) == "S(S(0))"
     with pytest.raises(ValueError):
@@ -490,7 +505,9 @@ def test_theorem_scopes_and_tactics(env):
     refl_lemma = Lemma("add_refl", reflexive_clause, refl_cert)
     scoped_theory.register_lemma(refl_lemma, depth=6, induction_depth=1)
     with pytest.raises(ValueError):
-        scoped_theory.register_lemma_rewrite("add_refl", scope="list_scope", orientation="auto")
+        scoped_theory.register_lemma_rewrite(
+            "add_refl", scope="list_scope", orientation="auto"
+        )
 
     sess3 = ProofSession(Clause((), eq(app(xs, nil), xs)), scoped_engine)
     sess3.activate_scope("list_scope")
@@ -533,7 +550,9 @@ def test_theorem_scopes_and_tactics(env):
     assert sess_ih_drop.goals and sess_ih_drop.current_goal().goal != true
 
     with pytest.raises(ValueError):
-        sess_multi.induct_many([x_nat, y_nat], schemes=[get_induction_scheme(env["engine"], "nat")])
+        sess_multi.induct_many(
+            [x_nat, y_nat], schemes=[get_induction_scheme(env["engine"], "nat")]
+        )
 
     dup_clause = Clause(((x, env["y"]), (env["y"], x), (x, env["y"])), eq(x, env["y"]))
     dup_simplified = simplify_clause(dup_clause, env["engine"])
@@ -586,7 +605,9 @@ def test_typing_theories_and_installation(env):
     install_theory(scoped_theory_engine, list_theory(), activate_scopes=True)
     scoped_theory = get_theorem_environment(scoped_theory_engine)
     with pytest.raises(ValueError):
-        scoped_theory.register_definition("bad_len", App("length", zero), zero, scope="def_scope")
+        scoped_theory.register_definition(
+            "bad_len", App("length", zero), zero, scope="def_scope"
+        )
 
     bad_clause_sort = Clause((), App("eq", add(nil, zero), zero))
     with pytest.raises(ValueError):
@@ -633,7 +654,10 @@ def test_typing_theories_and_installation(env):
         install_engine_a, install_theory_payload, activate_scopes=False
     )
     assert activated_scopes == ("theory:toy.install",)
-    assert str(normalize(App("double", App("S", zero)), install_engine_a)) == "double(S(0))"
+    assert (
+        str(normalize(App("double", App("S", zero)), install_engine_a))
+        == "double(S(0))"
+    )
     get_theorem_environment(install_engine_a).activate_scope("theory:toy.install")
     install_engine_a.ground_cache.clear()
     assert str(normalize(App("double", App("S", zero)), install_engine_a)) == "S(S(0))"
@@ -667,7 +691,9 @@ def test_typing_theories_and_installation(env):
         )
     install_env_c = get_theorem_environment(install_engine_c)
     install_env_c.create_scope("shared_scope")
-    install_env_c.register_rule(Rule(add(x, zero), x), scope="shared_scope", label="seed.shared")
+    install_env_c.register_rule(
+        Rule(add(x, zero), x), scope="shared_scope", label="seed.shared"
+    )
     with pytest.raises(ValueError):
         install_theory(
             install_engine_c,
@@ -725,7 +751,9 @@ def test_typing_theories_and_installation(env):
     y_bool = V("yb", "Bool")
     register_induction_scheme(
         engine,
-        InductionScheme(name="bool", sort="Bool", base_terms=(true, false), constructors=()),
+        InductionScheme(
+            name="bool", sort="Bool", base_terms=(true, false), constructors=()
+        ),
     )
     demorgan_goal = Clause(
         (),
@@ -741,7 +769,9 @@ def test_typing_theories_and_installation(env):
 
     core_config = default_engine_config()
     core_sigs = default_sort_signatures()
-    core_engine = make_engine(rules=builtin_rules(), config=core_config, ground_cache={}, schemes={})
+    core_engine = make_engine(
+        rules=builtin_rules(), config=core_config, ground_cache={}, schemes={}
+    )
     for sym in ("add", "mul", "nil", "cons", "append", "length"):
         assert sym not in core_config.precedence
         assert sym not in core_config.assoc
@@ -759,3 +789,75 @@ def test_typing_theories_and_installation(env):
     assert list_core.precedence["append"] == 3
     assert list_core.precedence["length"] == 3
     assert one == Const("1")
+
+
+def test_map_theory():
+    reset_var_interner()
+    m = V("m", "Map")
+    k = V("mk")
+    k1 = V("mk1")
+    k2 = V("mk2")
+    v = V("mv")
+    v1 = V("mv1")
+    v2 = V("mv2")
+
+    empty = Const("empty")
+    none = Const("none")
+    put = lambda m, k, v: App("put", m, k, v)
+    get = lambda m, k: App("get", m, k)
+    some = lambda x: App("some", x)
+    eq = lambda a, b: App("eq", a, b)
+
+    map_core = map_theory()
+    assert map_core.sort_arities["Map"] == 2
+    assert map_core.sort_arities["Option"] == 1
+    assert map_core.sort_signatures["empty"].result_sort == TypeConst(
+        "Map", (TypeVar("K"), TypeVar("V"))
+    )
+    assert map_core.sort_signatures["get"].result_sort == TypeConst(
+        "Option", (TypeVar("V"),)
+    )
+    assert map_core.precedence["put"] == 2
+    assert map_core.precedence["get"] == 2
+
+    map_engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
+    install_theory(map_engine, map_theory(), activate_scopes=True)
+
+    get_empty_goal = Clause((), eq(get(empty, k), none), ())
+    assert prove(get_empty_goal, map_engine, depth=8)
+
+    get_put_same_goal = Clause((), eq(get(put(m, k, v), k), some(v)), ())
+    assert prove(get_put_same_goal, map_engine, depth=8)
+
+    get_put_outer_goal = Clause(
+        (), eq(get(put(put(m, k2, v2), k1, v1), k1), some(v1)), ()
+    )
+    assert prove(get_put_outer_goal, map_engine, depth=8)
+
+    get_put_inner_diseq_goal = Clause(
+        (), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),)
+    )
+    assert prove(get_put_inner_diseq_goal, map_engine, depth=8)
+
+    get_put_inner_diseq_simp = simplify_clause(
+        Clause((), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),)),
+        map_engine,
+    )
+    assert clause_solved(get_put_inner_diseq_simp)
+
+    get_put_inner_no_cond_goal = Clause(
+        (), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ()
+    )
+    assert not prove(get_put_inner_no_cond_goal, map_engine, depth=8)
+
+    get_put_if_goal = Clause((), eq(get(put(m, k1, v1), k2), some(v1)), ())
+    get_put_simp = simplify_clause(get_put_if_goal, map_engine)
+    get_put_simp_lhs = get_put_simp.goal.args[0]
+    assert get_put_simp_lhs == App("if", eq(k1, k2), some(v1), get(m, k2))
+
+    if_cond = App("if", eq(k1, k2), some(v1), get(m, k2))
+    split_if_clause = Clause((), if_cond, ())
+    branches = split_clause(split_if_clause)
+    assert len(branches) == 2
+    assert branches[0].assumptions == ((k1, k2),)
+    assert branches[1].disequalities == ((k1, k2),)

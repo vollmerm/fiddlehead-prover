@@ -42,7 +42,7 @@ from .proof import (
     goal_equality,
     simplify_clause_with_stages,
 )
-from .syntax import App, Const, Fun, Term, V, Var, true
+from .syntax import App, Const, Fun, Term, V, Var, false, true
 from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 
@@ -93,6 +93,7 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
     x = V("nat_x")
     y = V("nat_y")
     zero = Const("0")
+
     def succ(term: Term) -> Term:
         return App("S", term)
 
@@ -101,12 +102,17 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
 
     def mul(left: Term, right: Term) -> Term:
         return App("mul", left, right)
+
     return Theory(
         name=name,
         version=version,
         sort_signatures={
-            "add": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
-            "mul": SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")),
+            "add": SortSignature(
+                (TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")
+            ),
+            "mul": SortSignature(
+                (TypeConst("Nat"), TypeConst("Nat")), TypeConst("Nat")
+            ),
         },
         rules=(
             Rule(add(zero, y), y),
@@ -131,6 +137,7 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     tail = V("list_xt", "List")
     xs = V("list_xs", "List")
     nil = Const("nil")
+
     def cons(left: Term, right: Term) -> Term:
         return App("cons", left, right)
 
@@ -144,13 +151,16 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
 
     def succ(term: Term) -> Term:
         return App("S", term)
+
     return Theory(
         name=name,
         version=version,
         sort_arities={"List": 1},
         sort_signatures={
             "nil": SortSignature((), TypeConst("List", (a,))),
-            "cons": SortSignature((a, TypeConst("List", (a,))), TypeConst("List", (a,))),
+            "cons": SortSignature(
+                (a, TypeConst("List", (a,))), TypeConst("List", (a,))
+            ),
             "append": SortSignature(
                 (TypeConst("List", (a,)), TypeConst("List", (a,))),
                 TypeConst("List", (a,)),
@@ -165,6 +175,60 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
         ),
         schemes=(list_induction_scheme(),),
         precedence={"append": 3, "length": 3, "cons": 2},
+    )
+
+
+def map_theory(name: str = "core.map", version: str = "1.0.0") -> Theory:
+    """Return a finite-map theory with get/put operations and optional values."""
+
+    k = TypeVar("K")
+    v = TypeVar("V")
+    m = V("map_m", "Map")
+    j = V("map_j")
+    key = V("map_k")
+    val = V("map_v")
+
+    empty = Const("empty")
+
+    def put(map_term: Term, key_term: Term, val_term: Term) -> Term:
+        return App("put", map_term, key_term, val_term)
+
+    def get(map_term: Term, key_term: Term) -> Term:
+        return App("get", map_term, key_term)
+
+    none = Const("none")
+
+    def some(val_term: Term) -> Term:
+        return App("some", val_term)
+
+    def eq(a: Term, b: Term) -> Term:
+        return App("eq", a, b)
+
+    return Theory(
+        name=name,
+        version=version,
+        sort_arities={"Map": 2, "Option": 1},
+        sort_signatures={
+            "empty": SortSignature((), TypeConst("Map", (k, v))),
+            "put": SortSignature(
+                (TypeConst("Map", (k, v)), k, v),
+                TypeConst("Map", (k, v)),
+            ),
+            "get": SortSignature(
+                (TypeConst("Map", (k, v)), k),
+                TypeConst("Option", (v,)),
+            ),
+            "none": SortSignature((), TypeConst("Option", (v,))),
+            "some": SortSignature((v,), TypeConst("Option", (v,))),
+        },
+        rules=(
+            Rule(get(empty, key), none),
+            Rule(get(put(m, key, val), key), some(val)),
+            Rule(
+                get(put(m, j, val), key), App("if", eq(j, key), some(val), get(m, key))
+            ),
+        ),
+        precedence={"put": 2, "get": 2},
     )
 
 
@@ -288,7 +352,9 @@ def _check_theory_install_conflicts(
     for lemma in theory.lemmas:
         existing_lemma = env.lemmas.get(lemma.name)
         if existing_lemma is not None and existing_lemma != lemma:
-            raise ValueError(f"Theory {theory.name} conflicts on lemma name: {lemma.name}.")
+            raise ValueError(
+                f"Theory {theory.name} conflicts on lemma name: {lemma.name}."
+            )
 
     for definition_name, definition in theory.definitions.items():
         existing_definition = env.definitions.get(definition_name)
@@ -318,7 +384,9 @@ def _clone_theorem_environment(
     cloned.lemmas = dict(source.lemmas)
     cloned.definitions = dict(source.definitions)
     cloned.lemma_rewrites = dict(source.lemma_rewrites)
-    cloned.scoped_rule_sets = {scope: list(rules) for scope, rules in source.scoped_rule_sets.items()}
+    cloned.scoped_rule_sets = {
+        scope: list(rules) for scope, rules in source.scoped_rule_sets.items()
+    }
     cloned.active_scopes = set(source.active_scopes)
     return cloned
 
@@ -344,7 +412,9 @@ def _clone_engine_for_theory_preflight(engine: Engine) -> Engine:
     return cloned
 
 
-def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) -> Tuple[str, ...]:
+def _install_theory_impl(
+    engine: Engine, theory: Theory, activate_scopes: bool
+) -> Tuple[str, ...]:
     env = get_theorem_environment(engine)
     install_scope = f"theory:{theory.name}"
     _check_theory_install_conflicts(engine, env, theory, install_scope)
@@ -372,10 +442,14 @@ def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) 
 
     for name in sorted(theory.definitions):
         definition = theory.definitions[name]
-        env.register_definition(name, definition.lhs, definition.rhs, scope=install_scope)
+        env.register_definition(
+            name, definition.lhs, definition.rhs, scope=install_scope
+        )
 
     for index, rule in enumerate(theory.rules):
-        env.register_rule(rule, scope=install_scope, label=f"{theory.name}.rule[{index}]")
+        env.register_rule(
+            rule, scope=install_scope, label=f"{theory.name}.rule[{index}]"
+        )
 
     for lemma in sorted(theory.lemmas, key=lambda item: item.name):
         env.register_lemma(lemma)
@@ -386,7 +460,9 @@ def _install_theory_impl(engine: Engine, theory: Theory, activate_scopes: bool) 
     return activated
 
 
-def install_theory(engine: Engine, theory: Theory, activate_scopes: bool = True) -> Tuple[str, ...]:
+def install_theory(
+    engine: Engine, theory: Theory, activate_scopes: bool = True
+) -> Tuple[str, ...]:
     """Install a theory with conflict preflight, then mutate the real engine."""
 
     preflight = _clone_engine_for_theory_preflight(engine)
@@ -417,7 +493,9 @@ def _select_induction_scheme(
     if chosen is None and var.sort is not None:
         chosen = get_induction_scheme_for_sort(engine, var.sort)
     if chosen is None:
-        raise ValueError("No induction scheme provided and no scheme found for variable sort.")
+        raise ValueError(
+            "No induction scheme provided and no scheme found for variable sort."
+        )
     if not var_matches_scheme(var, chosen):
         raise ValueError(
             f"Variable {var.name} is incompatible with induction scheme {chosen.name}."
@@ -492,7 +570,9 @@ class TheoremEnvironment:
         self.active_scopes.discard(name)
         self._sync_engine_rules()
 
-    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+    def register_lemma(
+        self, lemma: Lemma, depth: int = 12, induction_depth: int = 2
+    ) -> None:
         """Validate and store a proved lemma."""
 
         if lemma.clause.assumptions:
@@ -543,7 +623,9 @@ class TheoremEnvironment:
             case _:
                 raise ValueError("Definition lhs must be a function application.")
         if _contains_symbol(rhs, symbol):
-            raise ValueError("Recursive definitions are not supported in this prover core.")
+            raise ValueError(
+                "Recursive definitions are not supported in this prover core."
+            )
         if symbol not in self.engine.config.precedence:
             base = max(self.engine.config.precedence.values(), default=0)
             self.engine.config.precedence[symbol] = base + 1

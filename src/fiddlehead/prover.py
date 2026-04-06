@@ -84,6 +84,7 @@ from .theory import (
     install_theory,
     list_theory,
     load_theory_module,
+    map_theory,
     nat_theory,
     theory_from_module,
 )
@@ -110,6 +111,7 @@ __all__ = [
     "list_induction_scheme",
     "nat_theory",
     "list_theory",
+    "map_theory",
     "register_induction_scheme",
     "get_induction_scheme",
     "get_induction_scheme_for_sort",

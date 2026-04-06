@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 from typing import Dict
 
 import pytest
@@ -9,7 +10,7 @@ from fiddlehead.proof import split_clause
 
 
 @pytest.fixture
-def env():
+def env() -> Dict[str, object]:
     reset_var_interner()
     x = V("x")
     y = V("y")
@@ -34,7 +35,7 @@ def env():
     neq = lambda a, b: App("neq", a, b)
     f = lambda a: App("f", a)
 
-    r3 = Rule(f(x), one, conditions=((x, zero),))
+    r3 = Rule(f(x), one, conditions=((x, zero),))  # type: ignore
     rules = builtin_rules() + [r3]
     shared_cache: Dict[Term, Term] = {}
     shared_schemes: Dict[str, InductionScheme] = {}
@@ -81,7 +82,7 @@ def env():
     }
 
 
-def test_term_rewriting_basics(env):
+def test_term_rewriting_basics(env) -> None:  # type: ignore
     add = env["add"]
     S = env["S"]
     zero = env["zero"]
@@ -100,6 +101,7 @@ def test_term_rewriting_basics(env):
     assert App("f", x) is App("f", x)
     assert str(apply_subst(add(x, y), {x: zero})) == "add(0, y)"
     m = match(add(x, y), add(zero, S(zero)))
+    assert m is not None
     assert m[x] is zero
     assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
     assert str(normalize(f(zero), engine)) == "1"
@@ -109,7 +111,7 @@ def test_term_rewriting_basics(env):
     assert one == Const("1")
 
 
-def test_trace_clause_and_cache_basics(env):
+def test_trace_clause_and_cache_basics(env) -> None:  # type: ignore
     add = env["add"]
     S = env["S"]
     x = env["x"]
@@ -155,7 +157,7 @@ def test_trace_clause_and_cache_basics(env):
     assert clause_solved(simplify_clause(clause3, engine))
 
 
-def test_disequality_simplification_and_split_branch_contexts(env):
+def test_disequality_simplification_and_split_branch_contexts(env) -> None:  # type: ignore
     x = env["x"]
     y = env["y"]
     eq = env["eq"]
@@ -185,7 +187,7 @@ def test_disequality_simplification_and_split_branch_contexts(env):
     assert bool_branches[1].disequalities == ()
 
 
-def test_builtin_rules_do_not_claim_common_variable_names():
+def test_builtin_rules_do_not_claim_common_variable_names() -> None:
     reset_var_interner()
     builtin_rules()
     x_nat = V("x", "Nat")
@@ -194,7 +196,7 @@ def test_builtin_rules_do_not_claim_common_variable_names():
     assert y_list.sort == "List"
 
 
-def test_induction_branches_and_proofs(env):
+def test_induction_branches_and_proofs(env) -> None:  # type: ignore
     add = env["add"]
     app = env["app"]
     length = env["length"]
@@ -279,7 +281,7 @@ def test_induction_branches_and_proofs(env):
     )
 
 
-def test_cache_and_config_isolation(env):
+def test_cache_and_config_isolation(env) -> None:  # type: ignore
     add = env["add"]
     x = env["x"]
     y = env["y"]
@@ -345,7 +347,7 @@ def test_cache_and_config_isolation(env):
     assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
 
 
-def test_variable_interning_and_sort_conflicts():
+def test_variable_interning_and_sort_conflicts() -> None:
     reset_var_interner()
     vx1 = V("vx")
     vx2 = V("vx")
@@ -365,7 +367,7 @@ def test_variable_interning_and_sort_conflicts():
         V("u", "List")
 
 
-def test_traces_certificates_and_sessions(env):
+def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
     add = env["add"]
     app = env["app"]
     x = env["x"]
@@ -445,7 +447,7 @@ def test_traces_certificates_and_sessions(env):
     assert "session-exact" in sess_trace_rendered
 
 
-def test_theorem_scopes_and_tactics(env):
+def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
     add = env["add"]
     app = env["app"]
     x = env["x"]
@@ -487,7 +489,9 @@ def test_theorem_scopes_and_tactics(env):
     scoped_theory.deactivate_scope("list_scope")
     assert str(normalize(app(xs, nil), scoped_engine)) == "append(xs, nil)"
 
-    register_sort_signature(scoped_engine, "double", SortSignature(("Nat",), "Nat"))
+    register_sort_signature(
+        scoped_engine, "double", SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+    )
     scoped_theory.register_definition(
         "double", App("double", x), add(x, x), scope="def_scope"
     )
@@ -547,7 +551,10 @@ def test_theorem_scopes_and_tactics(env):
     assert len(sess_ih_drop.assumptions()) >= 1
     sess_ih_drop.keep_assumptions([])
     sess_ih_drop.simp()
-    assert sess_ih_drop.goals and sess_ih_drop.current_goal().goal != true
+    assert sess_ih_drop.goals is not None
+    current = sess_ih_drop.current_goal()
+    assert current is not None
+    assert current.goal != true
 
     with pytest.raises(ValueError):
         sess_multi.induct_many(
@@ -567,7 +574,7 @@ def test_theorem_scopes_and_tactics(env):
     assert "stage-context-goal" in sess_stages_rendered
 
 
-def test_typing_theories_and_installation(env):
+def test_typing_theories_and_installation(env) -> None:  # type: ignore
     add = env["add"]
     mul = env["mul"]
     bnot = env["bnot"]
@@ -581,7 +588,7 @@ def test_typing_theories_and_installation(env):
     engine = env["engine"]
     shared_config = env["shared_config"]
 
-    is_zero_sig = SortSignature(("Nat",), "Bool")
+    is_zero_sig = SortSignature((TypeConst("Nat"),), TypeConst("Bool"))
     register_sort_signature(engine, "is_zero", is_zero_sig)
     assert get_sort_signature(engine, "is_zero") == is_zero_sig
     assert infer_sort(App("is_zero", zero), engine) == "Bool"
@@ -621,7 +628,9 @@ def test_typing_theories_and_installation(env):
         name="toy.arith",
         version="1.0.0",
         depends_on=("core.peano>=1.0.0",),
-        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        sort_signatures={
+            "double": SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+        },
         rules=(Rule(App("double", x), add(x, x)),),
         definitions={"double": Rule(App("double", x), add(x, x))},
         schemes=(nat_scheme,),
@@ -630,10 +639,11 @@ def test_typing_theories_and_installation(env):
     assert toy_theory.name == "toy.arith"
     assert toy_theory.rules[0].lhs == App("double", x)
     assert toy_theory.definitions["double"].rhs == add(x, x)
-    _ToyModule = type("_ToyModule", (), {"THEORY": toy_theory})
+    _ToyModule = types.ModuleType("_ToyModule")
+    _ToyModule.THEORY = toy_theory  # type: ignore
     assert theory_from_module(_ToyModule) is toy_theory
     with pytest.raises(ValueError):
-        theory_from_module(object())
+        theory_from_module(object())  # type: ignore
 
     install_rules = builtin_rules()
     install_engine_a = make_engine(
@@ -646,7 +656,9 @@ def test_typing_theories_and_installation(env):
     install_theory(install_engine_b, nat_theory(), activate_scopes=True)
     install_theory_payload = Theory(
         name="toy.install",
-        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        sort_signatures={
+            "double": SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+        },
         rules=(Rule(App("double", x), add(x, x)),),
         precedence={"double": 4},
     )
@@ -685,7 +697,11 @@ def test_typing_theories_and_installation(env):
             install_engine_c,
             Theory(
                 name="bad.sig",
-                sort_signatures={"add": SortSignature(("Nat", "Bool"), "Nat")},
+                sort_signatures={
+                    "add": SortSignature(
+                        (TypeConst("Nat"), TypeConst("Bool")), TypeConst("Nat")
+                    )
+                },
             ),
             activate_scopes=False,
         )
@@ -707,7 +723,9 @@ def test_typing_theories_and_installation(env):
     install_theory(install_engine_d, nat_theory(), activate_scopes=True)
     bad_atomic = Theory(
         name="bad.atomic",
-        sort_signatures={"double": SortSignature(("Nat",), "Nat")},
+        sort_signatures={
+            "double": SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+        },
         rules=(Rule(add(nil, zero), zero),),
         default_scopes=("atomic_scope",),
     )
@@ -791,7 +809,7 @@ def test_typing_theories_and_installation(env):
     assert one == Const("1")
 
 
-def test_map_theory():
+def test_map_theory() -> None:
     reset_var_interner()
     m = V("m", "Map")
     k = V("mk")
@@ -823,39 +841,46 @@ def test_map_theory():
     map_engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
     install_theory(map_engine, map_theory(), activate_scopes=True)
 
-    get_empty_goal = Clause((), eq(get(empty, k), none), ())
+    get_empty_goal = Clause((), eq(get(empty, k), none), ())  # type: ignore
     assert prove(get_empty_goal, map_engine, depth=8)
 
-    get_put_same_goal = Clause((), eq(get(put(m, k, v), k), some(v)), ())
+    get_put_same_goal = Clause((), eq(get(put(m, k, v), k), some(v)), ())  # type: ignore
     assert prove(get_put_same_goal, map_engine, depth=8)
 
     get_put_outer_goal = Clause(
-        (), eq(get(put(put(m, k2, v2), k1, v1), k1), some(v1)), ()
+        (),
+        eq(get(put(put(m, k2, v2), k1, v1), k1), some(v1)),  # type: ignore
+        (),
     )
     assert prove(get_put_outer_goal, map_engine, depth=8)
 
     get_put_inner_diseq_goal = Clause(
-        (), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),)
+        (),
+        eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)),  # type: ignore
+        ((k2, k1),),
     )
     assert prove(get_put_inner_diseq_goal, map_engine, depth=8)
 
     get_put_inner_diseq_simp = simplify_clause(
-        Clause((), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),)),
+        Clause((), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),)),  # type: ignore
         map_engine,
     )
     assert clause_solved(get_put_inner_diseq_simp)
 
     get_put_inner_no_cond_goal = Clause(
-        (), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ()
+        (),
+        eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)),  # type: ignore
+        (),
     )
     assert not prove(get_put_inner_no_cond_goal, map_engine, depth=8)
 
-    get_put_if_goal = Clause((), eq(get(put(m, k1, v1), k2), some(v1)), ())
+    get_put_if_goal = Clause((), eq(get(put(m, k1, v1), k2), some(v1)), ())  # type: ignore
     get_put_simp = simplify_clause(get_put_if_goal, map_engine)
+    assert isinstance(get_put_simp.goal, Fun)
     get_put_simp_lhs = get_put_simp.goal.args[0]
-    assert get_put_simp_lhs == App("if", eq(k1, k2), some(v1), get(m, k2))
+    assert get_put_simp_lhs == App("if", eq(k1, k2), some(v1), get(m, k2))  # type: ignore
 
-    if_cond = App("if", eq(k1, k2), some(v1), get(m, k2))
+    if_cond = App("if", eq(k1, k2), some(v1), get(m, k2))  # type: ignore
     split_if_clause = Clause((), if_cond, ())
     branches = split_clause(split_if_clause)
     assert len(branches) == 2

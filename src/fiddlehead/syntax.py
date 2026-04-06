@@ -7,6 +7,7 @@ term language. It also provides constructors and matching/substitution helpers
 used by rewriting, clause simplification, and proof search.
 """
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import ClassVar, Dict, Optional, Tuple
 from weakref import WeakValueDictionary
@@ -68,6 +69,9 @@ class Var(Term):
 
 _VAR_INTERN: Dict[Tuple[str, Optional[str]], Var] = {}
 _VAR_NAME_SORT: Dict[str, Optional[str]] = {}
+_engine_interner: ContextVar[Optional[Dict[Tuple[str, Optional[str]], Var]]] = (
+    ContextVar("_engine_interner", default=None)
+)
 
 
 def reset_var_interner() -> None:
@@ -78,14 +82,28 @@ def reset_var_interner() -> None:
 
     _VAR_INTERN.clear()
     _VAR_NAME_SORT.clear()
+    _engine_interner.set(None)
 
 
 def V(name: str, sort: Optional[str] = None) -> Var:
     """Create (or reuse) an interned variable.
 
-    Variables with the same name must use the same sort annotation across a
+    When an engine-scoped interner is active (inside ``Engine.var_context()``),
+    variables are interned per-engine. Otherwise, the shared global interner is
+    used. Variables with the same name must use the same sort annotation across a
     run; conflicting declarations raise ``ValueError``.
     """
+
+    shadow = _engine_interner.get()
+    if shadow is not None:
+        intern = shadow
+        key = (name, sort)
+        existing = intern.get(key)
+        if existing is not None:
+            return existing
+        v = Var(name, sort)
+        intern[key] = v
+        return v
 
     existing_sort = _VAR_NAME_SORT.get(name)
     if existing_sort is None and name in _VAR_NAME_SORT:
@@ -168,7 +186,9 @@ def apply_subst(term: Term, subst: Subst) -> Term:
     raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 
-def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optional[Subst]:
+def match(
+    pattern: Term, target: Term, subst: Optional[Subst] = None
+) -> Optional[Subst]:
     """First-order pattern matching from ``pattern`` onto ``target``.
 
     Returns a substitution on success, or ``None`` when matching fails.

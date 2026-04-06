@@ -79,9 +79,7 @@ def _apply_type_subst(term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> TypeTer
     match term:
         case TypeVar() as type_var:
             if type_var in subst:
-                out = _apply_type_subst(subst[type_var], subst)
-                subst[type_var] = out
-                return out
+                return _apply_type_subst(subst[type_var], subst)
             return type_var
         case TypeConst(name, args):
             if not args:
@@ -90,31 +88,46 @@ def _apply_type_subst(term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> TypeTer
     raise TypeError(f"Unsupported type term: {type(term)!r}")
 
 
-def _occurs_in_type(type_var: TypeVar, term: TypeTerm, subst: Dict[TypeVar, TypeTerm]) -> bool:
+def _occurs_in_type(
+    type_var: TypeVar,
+    term: TypeTerm,
+    subst: Dict[TypeVar, TypeTerm],
+    seen: set[TypeVar],
+) -> bool:
     term = _apply_type_subst(term, subst)
     match term:
         case TypeVar() as other:
             return other == type_var
         case TypeConst(_, args):
-            return any(_occurs_in_type(type_var, arg, subst) for arg in args)
+            for arg in args:
+                match arg:
+                    case TypeVar() as tv:
+                        if tv in seen:
+                            return True
+                        seen.add(tv)
+                if _occurs_in_type(type_var, arg, subst, seen):
+                    return True
+            return False
     raise TypeError(f"Unsupported type term: {type(term)!r}")
 
 
-def _unify_types(left: TypeTerm, right: TypeTerm, subst: Dict[TypeVar, TypeTerm], where: str) -> None:
+def _unify_types(
+    left: TypeTerm, right: TypeTerm, subst: Dict[TypeVar, TypeTerm], where: str
+) -> None:
     resolved_left = _apply_type_subst(left, subst)
     resolved_right = _apply_type_subst(right, subst)
     if resolved_left == resolved_right:
         return
     match resolved_left, resolved_right:
         case TypeVar() as left_var, _:
-            if _occurs_in_type(left_var, resolved_right, subst):
+            if _occurs_in_type(left_var, resolved_right, subst, set()):
                 raise ValueError(
                     f"Ill-typed {where}: recursive type in {left_var} ~ {resolved_right}."
                 )
             subst[left_var] = resolved_right
             return
         case _, TypeVar() as right_var:
-            if _occurs_in_type(right_var, resolved_left, subst):
+            if _occurs_in_type(right_var, resolved_left, subst, set()):
                 raise ValueError(
                     f"Ill-typed {where}: recursive type in {resolved_left} ~ {right_var}."
                 )
@@ -128,7 +141,9 @@ def _unify_types(left: TypeTerm, right: TypeTerm, subst: Dict[TypeVar, TypeTerm]
             for index, (left_arg, right_arg) in enumerate(zip(left_args, right_args)):
                 _unify_types(left_arg, right_arg, subst, f"{where} arg[{index}]")
             return
-    raise ValueError(f"Ill-typed {where}: cannot unify {resolved_left} with {resolved_right}.")
+    raise ValueError(
+        f"Ill-typed {where}: cannot unify {resolved_left} with {resolved_right}."
+    )
 
 
 def _fresh_type_var(prefix: str, counter: list[int]) -> TypeVar:
@@ -137,10 +152,14 @@ def _fresh_type_var(prefix: str, counter: list[int]) -> TypeVar:
     return TypeVar(f"{prefix}_{n}")
 
 
-def _type_from_sort_annotation(sort: str, engine: EngineLike, counter: list[int]) -> TypeTerm:
+def _type_from_sort_annotation(
+    sort: str, engine: EngineLike, counter: list[int]
+) -> TypeTerm:
     arity = engine.sort_arities.get(sort)
     if arity is not None:
-        return TypeConst(sort, tuple(_fresh_type_var("s", counter) for _ in range(arity)))
+        return TypeConst(
+            sort, tuple(_fresh_type_var("s", counter) for _ in range(arity))
+        )
     return TypeConst(sort)
 
 
@@ -169,7 +188,9 @@ def _freshen_signature(
                 return TypeConst(name, tuple(freshen(arg) for arg in args))
         raise TypeError(f"Unsupported type term: {type(term)!r}")
 
-    return tuple(freshen(arg) for arg in signature.arg_sorts), freshen(signature.result_sort)
+    return tuple(freshen(arg) for arg in signature.arg_sorts), freshen(
+        signature.result_sort
+    )
 
 
 def _infer_type_inner(
@@ -194,7 +215,9 @@ def _infer_type_inner(
         case Fun(symbol, args):
             signature = engine.sort_signatures.get(symbol)
             if signature is None:
-                raise ValueError(f"Unknown symbol type: {symbol}. Register a sort signature first.")
+                raise ValueError(
+                    f"Unknown symbol type: {symbol}. Register a sort signature first."
+                )
             expected_args, expected_result = _freshen_signature(signature, counter)
             if len(expected_args) != len(args):
                 raise ValueError(
@@ -202,7 +225,9 @@ def _infer_type_inner(
                 )
             for index, (arg, expected_type) in enumerate(zip(args, expected_args)):
                 actual_type = _infer_type_inner(arg, engine, var_env, subst, counter)
-                _unify_types(actual_type, expected_type, subst, f"{symbol} argument {index}")
+                _unify_types(
+                    actual_type, expected_type, subst, f"{symbol} argument {index}"
+                )
             return _apply_type_subst(expected_result, subst)
     raise TypeError(f"Unsupported term type: {type(term)!r}")
 
@@ -252,10 +277,16 @@ def _infer_pair_with_shared_env(
     left_type = _infer_type_inner(lhs, engine, env, subst, counter)
     right_type = _infer_type_inner(rhs, engine, env, subst, counter)
     _unify_types(left_type, right_type, subst, where)
-    return _apply_type_subst(left_type, subst), _apply_type_subst(right_type, subst), subst
+    return (
+        _apply_type_subst(left_type, subst),
+        _apply_type_subst(right_type, subst),
+        subst,
+    )
 
 
-def _validate_equality_pair(lhs: Term, rhs: Term, engine: EngineLike, where: str) -> None:
+def _validate_equality_pair(
+    lhs: Term, rhs: Term, engine: EngineLike, where: str
+) -> None:
     _infer_pair_with_shared_env(lhs, rhs, engine, where)
 
 

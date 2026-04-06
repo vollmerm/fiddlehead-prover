@@ -7,8 +7,9 @@ reasoning, memoization, and induction-scheme registration. Higher-level proof
 modules build on this engine.
 """
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, Optional, TYPE_CHECKING, Tuple
+from typing import ContextManager, Dict, Iterator, Optional, TYPE_CHECKING, Tuple
 
 from .syntax import (
     App,
@@ -226,15 +227,18 @@ class EqClasses:
         if root_left is root_right:
             return False
 
+        swapped = False
         if self.rank[root_left] < self.rank[root_right]:
             root_left, root_right = root_right, root_left
+            swapped = True
         elif self.rank[root_left] == self.rank[root_right] and _term_key(
             root_right
         ) < _term_key(root_left):
             root_left, root_right = root_right, root_left
+            swapped = True
 
         self.parent[root_right] = root_left
-        if self.rank[root_left] == self.rank[root_right]:
+        if not swapped:
             self.rank[root_left] += 1
         if _rep_priority(self.rep[root_right]) < _rep_priority(self.rep[root_left]):
             self.rep[root_left] = self.rep[root_right]
@@ -441,8 +445,31 @@ class Engine:
         self.index = RuleIndex(self.rules)
         self.memo: Dict[Term, Term] = {}
         self.eq_classes: Optional[EqClasses] = None
+        self._var_intern: Dict[Tuple[str, Optional[str]], Var] = {}
         for index, rule in enumerate(self.rules):
             _validate_rule_sorts(rule, self, f"rule[{index}]")
+
+    @contextmanager
+    def var_context(self) -> Iterator[None]:
+        """Enter an engine-scoped variable interning context.
+
+        Inside this context, ``V()`` uses the engine's private interner
+        instead of the shared global one.  The context restores the previous
+        state (or clears the shadow when no previous context existed).
+        Idempotent: re-entering the same engine's context from a recursive
+        call is a no-op.
+        """
+        from .syntax import _engine_interner
+
+        current = _engine_interner.get()
+        if current is self._var_intern:
+            yield
+            return
+        token = _engine_interner.set(self._var_intern)
+        try:
+            yield
+        finally:
+            _engine_interner.reset(token)
 
     def _ensure_eq_classes(self, term: Optional[Term] = None) -> None:
         if self.eq_classes is None:
@@ -581,6 +608,42 @@ class Engine:
             self.ground_cache[term] = term
         return term
 
+    def normalize_under_context(self, term: Term, ctx: Context) -> Term:
+        """Normalize a term under a temporary context, restoring the original after."""
+
+        saved_ctx = self.ctx
+        saved_eq = self.eq_classes
+        saved_memo = self.memo if ctx.equalities or ctx.disequalities else None
+        self.ctx = ctx
+        self.eq_classes = None
+        if saved_memo is not None:
+            self.memo = {}
+        try:
+            return self.normalize(term)
+        finally:
+            self.ctx = saved_ctx
+            self.eq_classes = saved_eq
+            if saved_memo is not None:
+                self.memo = saved_memo
+
+    def holds_under_context(self, left: Term, right: Term, ctx: Context) -> bool:
+        """Check equality under a temporary context, restoring the original after."""
+
+        saved_ctx = self.ctx
+        saved_eq = self.eq_classes
+        saved_memo = self.memo if ctx.equalities or ctx.disequalities else None
+        self.ctx = ctx
+        self.eq_classes = None
+        if saved_memo is not None:
+            self.memo = {}
+        try:
+            return self.holds(left, right)
+        finally:
+            self.ctx = saved_ctx
+            self.eq_classes = saved_eq
+            if saved_memo is not None:
+                self.memo = saved_memo
+
     def register_scheme(self, scheme: InductionScheme) -> None:
         for index, base in enumerate(scheme.base_terms):
             base_type = infer_type(base, self)
@@ -640,8 +703,7 @@ class Engine:
         self.index = RuleIndex(self.rules)
         self.memo = {}
         self.eq_classes = None
-        if self.ground_cache is not None:
-            self.ground_cache.clear()
+        self.ground_cache.clear()
 
     def register_sort_signature(self, symbol: str, signature: SortSignature) -> None:
         self.sort_signatures[symbol] = signature

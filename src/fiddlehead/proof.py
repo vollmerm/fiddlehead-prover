@@ -65,7 +65,10 @@ def vars_in_clause(clause: Clause) -> set[str]:
 def instantiate_clause(clause: Clause, subst: dict[Var, Term]) -> Clause:
     """Apply a substitution across assumptions and goal."""
 
-    assumptions = tuple((apply_subst(left, subst), apply_subst(right, subst)) for left, right in clause.assumptions)
+    assumptions = tuple(
+        (apply_subst(left, subst), apply_subst(right, subst))
+        for left, right in clause.assumptions
+    )
     disequalities = tuple(
         (apply_subst(left, subst), apply_subst(right, subst))
         for left, right in clause.disequalities
@@ -94,7 +97,9 @@ def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Va
     return V(candidate, sort)
 
 
-def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+def induction_branches(
+    clause: Clause, var: Var, scheme: InductionScheme
+) -> list[Clause]:
     """Generate base and step obligations for an induction application."""
 
     if not var_matches_scheme(var, scheme):
@@ -107,7 +112,10 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
         branches.append(instantiate_clause(clause, {var: base}))
 
     for constructor in scheme.constructors:
-        rec_vars = [fresh_var(f"{var.name}_ih", used, scheme.sort) for _ in constructor.recursive_positions]
+        rec_vars = [
+            fresh_var(f"{var.name}_ih", used, scheme.sort)
+            for _ in constructor.recursive_positions
+        ]
         ih_assumptions: list[Tuple[Term, Term]] = []
         for rec_var in rec_vars:
             ih_goal = instantiate_clause(clause, {var: rec_var}).goal
@@ -116,7 +124,10 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
                 return []
             ih_assumptions.append(eq_goal)
 
-        args: list[Term] = [fresh_var(f"{var.name}_{constructor.symbol}_arg", used) for _ in range(constructor.arity)]
+        args: list[Term] = [
+            fresh_var(f"{var.name}_{constructor.symbol}_arg", used)
+            for _ in range(constructor.arity)
+        ]
         for position, rec_var in zip(constructor.recursive_positions, rec_vars):
             args[position] = rec_var
 
@@ -140,7 +151,9 @@ def simplify_clause(clause: Clause, engine: Engine) -> Clause:
     return simplified
 
 
-def simplify_clause_with_stages(clause: Clause, engine: Engine) -> tuple[Clause, list[tuple[str, Clause]]]:
+def simplify_clause_with_stages(
+    clause: Clause, engine: Engine
+) -> tuple[Clause, list[tuple[str, Clause]]]:
     """Simplify a clause and return intermediate stage snapshots."""
 
     stages: list[tuple[str, Clause]] = []
@@ -283,7 +296,22 @@ def _prove_kernel(
     clause: Clause,
     engine: Engine,
     depth: int,
-    induction_handler: Optional[Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]] = None,
+    induction_handler: Optional[
+        Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
+    ] = None,
+    proof_node: Optional[ProofNode] = None,
+) -> bool:
+    with engine.var_context():
+        return _prove_kernel_impl(clause, engine, depth, induction_handler, proof_node)
+
+
+def _prove_kernel_impl(
+    clause: Clause,
+    engine: Engine,
+    depth: int,
+    induction_handler: Optional[
+        Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
+    ] = None,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
     if proof_node is not None:
@@ -319,7 +347,9 @@ def _prove_kernel(
         child = _new_node("branch", branch, note=f"index={index}")
         if proof_node is not None:
             proof_node.children.append(child)
-        branch_results.append(_prove_kernel(branch, engine, next_depth, induction_handler, child))
+        branch_results.append(
+            _prove_kernel_impl(branch, engine, next_depth, induction_handler, child)
+        )
     out = all(branch_results)
     if proof_node is not None:
         proof_node.solved = out
@@ -410,7 +440,9 @@ def prove_with_registered_induction(
             proof_node.solved = False
             proof_node.note = f"unknown scheme {scheme_name}"
         return False
-    return prove_with_induction(clause, engine, var, scheme, depth, induction_depth, proof_node)
+    return prove_with_induction(
+        clause, engine, var, scheme, depth, induction_depth, proof_node
+    )
 
 
 def prove_with_trace(
@@ -544,6 +576,20 @@ def _prove_certificate_kernel(
     scheme: Optional[InductionScheme],
     induction_depth: int,
 ) -> Optional[ProofCertificate]:
+    with engine.var_context():
+        return _prove_certificate_kernel_impl(
+            clause, engine, depth, var, scheme, induction_depth
+        )
+
+
+def _prove_certificate_kernel_impl(
+    clause: Clause,
+    engine: Engine,
+    depth: int,
+    var: Optional[Var],
+    scheme: Optional[InductionScheme],
+    induction_depth: int,
+) -> Optional[ProofCertificate]:
     if depth <= 0:
         return None
 
@@ -555,7 +601,9 @@ def _prove_certificate_kernel(
     if len(branches) > 1:
         children: list[ProofCertificate] = []
         for branch in branches:
-            child = _prove_certificate_kernel(branch, engine, depth - 1, var, scheme, induction_depth)
+            child = _prove_certificate_kernel_impl(
+                branch, engine, depth - 1, var, scheme, induction_depth
+            )
             if child is None:
                 return None
             children.append(child)
@@ -571,7 +619,7 @@ def _prove_certificate_kernel(
         if induction_goals:
             children = []
             for branch in induction_goals:
-                child = _prove_certificate_kernel(
+                child = _prove_certificate_kernel_impl(
                     branch,
                     engine,
                     depth,
@@ -612,7 +660,9 @@ def prove_checked(
     if var is not None and scheme is not None and not var_matches_scheme(var, scheme):
         return False, None
 
-    cert = _prove_certificate_kernel(clause, engine, depth, var, scheme, induction_depth)
+    cert = _prove_certificate_kernel(
+        clause, engine, depth, var, scheme, induction_depth
+    )
     return cert is not None, cert
 
 
@@ -636,7 +686,9 @@ def _check_certificate_node(
         branches = _check_split_step(cert.simplified)
         if len(branches) <= 1 or len(branches) != len(cert.children):
             return False
-        if any(child.clause != branch for child, branch in zip(cert.children, branches)):
+        if any(
+            child.clause != branch for child, branch in zip(cert.children, branches)
+        ):
             return False
         return all(
             _check_certificate_node(child, engine, depth - 1, induction_depth)
@@ -652,7 +704,9 @@ def _check_certificate_node(
         branches = induction_branches(cert.simplified, cert.var, scheme)
         if len(branches) != len(cert.children):
             return False
-        if any(child.clause != branch for child, branch in zip(cert.children, branches)):
+        if any(
+            child.clause != branch for child, branch in zip(cert.children, branches)
+        ):
             return False
         return all(
             _check_certificate_node(child, engine, depth, induction_depth - 1)
@@ -670,7 +724,8 @@ def check_certificate(
 ) -> bool:
     """Validate a certificate against engine semantics."""
 
-    return _check_certificate_node(cert, engine, depth, induction_depth)
+    with engine.var_context():
+        return _check_certificate_node(cert, engine, depth, induction_depth)
 
 
 def _certificate_to_proof_node(cert: ProofCertificate) -> ProofNode:
@@ -684,7 +739,9 @@ def _certificate_to_proof_node(cert: ProofCertificate) -> ProofNode:
     if cert.step == "solved":
         node.solved = True
     else:
-        node.solved = all(c.solved is True for c in node.children[1:]) if cert.children else False
+        node.solved = (
+            all(c.solved is True for c in node.children[1:]) if cert.children else False
+        )
     return node
 
 

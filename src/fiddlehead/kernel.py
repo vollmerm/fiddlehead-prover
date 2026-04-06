@@ -527,8 +527,13 @@ class Engine:
         if rule.conditions and not self.conditions_hold(rule.conditions, subst):
             return None
         new_term = apply_subst(rule.rhs, subst)
-        if not rule.conditions and not _decreases(self.config, term, new_term):
-            return None
+        if not rule.conditions:
+            symbol = getattr(term, "symbol", None)
+            ac_symbols = self.config.assoc | self.config.comm
+            if symbol in ac_symbols:
+                new_term = _ac_normalize(self.config, new_term)
+            if not _decreases(self.config, term, new_term):
+                return None
         if self.trace is not None:
             self.trace.add(term, new_term, rule)
         return new_term

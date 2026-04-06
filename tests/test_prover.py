@@ -662,6 +662,7 @@ def test_typing_theories_and_installation(env) -> None:  # type: ignore
         rules=(Rule(App("double", x), add(x, x)),),
         precedence={"double": 4},
     )
+    assert install_theory_payload.name == "toy.install"
     activated_scopes = install_theory(
         install_engine_a, install_theory_payload, activate_scopes=False
     )
@@ -886,3 +887,103 @@ def test_map_theory() -> None:
     assert len(branches) == 2
     assert branches[0].assumptions == ((k1, k2),)
     assert branches[1].disequalities == ((k1, k2),)
+
+
+def test_lpo_decrease_non_ac_symbol() -> None:
+    reset_var_interner()
+
+    x = V("x")
+    S = lambda t: App("S", t)
+    f = lambda a: App("f", a)
+
+    shared_signatures = default_sort_signatures()
+    shared_signatures["f"] = SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+
+    config = EngineConfig(
+        precedence={"S": 2, "f": 1, "0": 0},
+        assoc=set(),
+        comm=set(),
+    )
+
+    dec_rule = Rule(f(S(x)), f(x))
+    engine_dec = make_engine(
+        rules=[dec_rule],
+        config=config,
+        ground_cache={},
+        sort_signatures=shared_signatures,
+    )
+    assert str(normalize(f(S(Const("0"))), engine_dec)) == "f(0)"
+
+    non_dec_rule = Rule(f(x), f(S(x)))
+    engine_non_dec = make_engine(
+        rules=[non_dec_rule],
+        config=config,
+        ground_cache={},
+        sort_signatures=shared_signatures,
+    )
+    assert str(normalize(f(Const("0")), engine_non_dec)) == "f(0)"
+
+
+def test_lpo_decrease_skipped_for_ac_symbols() -> None:
+    reset_var_interner()
+
+    zero = Const("0")
+    S = lambda t: App("S", t)
+    add = lambda a, b: App("add", a, b)
+
+    config = EngineConfig(
+        precedence={"S": 2, "add": 3, "0": 0},
+        assoc={"add"},
+        comm={"add"},
+    )
+    engine = make_engine(rules=builtin_rules(), config=config, ground_cache={})
+    install_theory(engine, nat_theory(), activate_scopes=True)
+
+    assert str(normalize(add(S(zero), zero), engine)) == "S(0)"
+
+    assert str(normalize(add(zero, S(zero)), engine)) == "S(0)"
+
+
+def test_ac_and_non_ac_mixed_normalization() -> None:
+    reset_var_interner()
+
+    zero = Const("0")
+    S = lambda t: App("S", t)
+    add = lambda a, b: App("add", a, b)
+    leaf = Const("leaf")
+    node = lambda l, v, r: App("node", l, v, r)
+    mirror_fn = lambda t: App("mirror", t)
+
+    engine = make_engine(rules=builtin_rules())
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, tree_theory(), activate_scopes=True)
+
+    register_sort_signature(
+        engine,
+        "mirror",
+        SortSignature(
+            (TypeConst("Tree", (TypeVar("A"),)),), TypeConst("Tree", (TypeVar("A"),))
+        ),
+    )
+    engine.config.precedence["mirror"] = 5
+    engine.config.assoc.add("add")
+    engine.config.comm.add("add")
+
+    l = V("l", "Tree")
+    r = V("r", "Tree")
+    v = V("v")
+
+    engine.reset_rules(
+        engine.rules
+        + [Rule(mirror_fn(leaf), leaf)]
+        + [Rule(mirror_fn(node(l, v, r)), node(mirror_fn(r), v, mirror_fn(l)))]
+    )
+
+    t = node(leaf, v, leaf)
+    assert str(normalize(mirror_fn(t), engine)) == "node(leaf, v, leaf)"
+
+    s = add(S(zero), zero)
+    assert str(normalize(s, engine)) == "S(0)"
+
+    t2 = add(zero, S(zero))
+    assert str(normalize(t2, engine)) == "S(0)"

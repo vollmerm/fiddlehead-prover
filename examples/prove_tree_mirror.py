@@ -96,7 +96,10 @@ def main() -> None:
         print(f"  Simplified to: {goal3.goal} -> true")
     print()
 
-    print("=== All theorems proved! ===")
+    if ok1 and ok2 and ok3:
+        print("=== All theorems proved! ===")
+    else:
+        print("=== Some theorems failed! ===")
 
 
 if __name__ == "__main__":

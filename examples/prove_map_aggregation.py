@@ -108,7 +108,10 @@ def main() -> None:
     print(f"  Proved: {ok4}")
     print()
 
-    print("=== All theorems proved! ===")
+    if ok1 and ok2 and ok3 and ok4:
+        print("=== All theorems proved! ===")
+    else:
+        print("=== Some theorems failed! ===")
 
 
 if __name__ == "__main__":

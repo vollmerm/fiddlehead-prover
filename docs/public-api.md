@@ -260,11 +260,53 @@ print(render_proof_trace(trace))
 | `prove_append_associativity.py` | `V`, `App`, `Clause`, `list_theory`, `prove_with_trace`, `render_proof_trace` |
 | `prove_length_append.py` | same as above, plus installing both `nat_theory()` and `list_theory()` |
 | `prove_map_theorems.py` | `Clause(..., disequalities=...)` and `simplify_clause` |
+| `prove_map_aggregation.py` | `register_recursive_definition`, `SortSignature`, `prove_with_trace`, `prove_with_induction` |
 
 The remaining examples go a step further and extend the prover with custom sort
 signatures, rewrite rules, or induction schemes. Those are public APIs too, but
 they are not the first things you need to learn to write the simpler proofs in
 this repository.
+
+## Recursive function definitions
+
+Use `register_recursive_definition(...)` when you want to add recursive function
+equations through the public API instead of manually mutating engine rule lists.
+
+```python
+register_recursive_definition(
+    engine,
+    "sum_entries",
+    (
+        (sum_entries(empty), zero),
+        (sum_entries(put(m, k, n)), add(n, sum_entries(m))),
+    ),
+    signature=SortSignature(
+        (TypeConst("Map", (TypeVar("K"), TypeConst("Nat"))),),
+        TypeConst("Nat"),
+    ),
+    precedence=5,
+    scope="map_aggregation",
+)
+```
+
+The equations are validated for sort correctness and required to be decreasing
+as rewrite rules under the engine's current ordering.
+
+If you are already working with the theorem environment directly, you can use
+`get_theorem_environment(engine).register_recursive_definition(...)`.
+
+In interactive scripts, the same feature is available through
+`ProofSession.register_recursive_definition(...)`.
+
+All three entry points register scoped rules, so you can activate and deactivate
+the scope the same way you manage lemma rewrites and non-recursive definitions.
+
+`examples/prove_map_aggregation.py` shows the recommended workflow:
+
+1. Register the symbol signature (`SortSignature`)
+2. Register recursive equations with `register_recursive_definition(...)`
+3. Prove properties of the new function with `prove_with_trace(...)` and
+   `prove_with_induction(...)`
 
 ## What to read next
 

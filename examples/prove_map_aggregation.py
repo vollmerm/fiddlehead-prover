@@ -17,8 +17,6 @@ def main() -> None:
     install_theory(engine, map_theory(), activate_scopes=True)
     register_induction_scheme(engine, map_induction_scheme())
 
-    env = get_theorem_environment(engine)
-
     m = V("m", "Map")
     k = V("k")
     k1 = V("k1")
@@ -37,20 +35,21 @@ def main() -> None:
     empty = Const("empty")
     sum_entries = lambda m: App("sum_entries", m)
 
-    register_sort_signature(
+    register_recursive_definition(
         engine,
         "sum_entries",
-        SortSignature(
+        (
+            (sum_entries(empty), zero),
+            (sum_entries(put(m, k, n)), add(n, sum_entries(m))),
+        ),
+        signature=SortSignature(
             (TypeConst("Map", (TypeVar("K"), TypeConst("Nat"))),),
             TypeConst("Nat"),
         ),
+        precedence=5,
+        scope="map_aggregation",
     )
-    engine.config.precedence["sum_entries"] = 5
-    engine.reset_rules(
-        engine.rules
-        + [Rule(sum_entries(empty), zero)]
-        + [Rule(sum_entries(put(m, k, n)), add(n, sum_entries(m)))]
-    )
+    get_theorem_environment(engine).activate_scope("map_aggregation")
 
     print("=== Map Aggregation with Induction ===\n")
 

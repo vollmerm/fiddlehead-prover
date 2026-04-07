@@ -509,6 +509,73 @@ def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
         )
     scoped_theory.deactivate_scope("def_scope")
 
+    zero_nat = Const("0")
+    succ = lambda t: App("S", t)
+    sum_to = lambda t: App("sum_to", t)
+    register_recursive_definition(
+        scoped_engine,
+        "sum_to",
+        (
+            (sum_to(zero_nat), zero_nat),
+            (sum_to(succ(x_nat)), add(succ(x_nat), sum_to(x_nat))),
+        ),
+        signature=SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
+        precedence=5,
+        scope="rec_scope",
+    )
+    assert str(normalize(sum_to(succ(zero_nat)), scoped_engine)) == "sum_to(S(0))"
+    scoped_theory.activate_scope("rec_scope")
+    assert str(normalize(sum_to(succ(zero_nat)), scoped_engine)) == "S(0)"
+    scoped_theory.deactivate_scope("rec_scope")
+
+    sess_defs = ProofSession(Clause((), eq(sum_to(zero_nat), zero_nat)), scoped_engine)
+    sess_defs.register_recursive_definition(
+        "sum_to_sess",
+        (
+            (App("sum_to_sess", zero_nat), zero_nat),
+            (
+                App("sum_to_sess", succ(x_nat)),
+                add(succ(x_nat), App("sum_to_sess", x_nat)),
+            ),
+        ),
+        scope="rec_scope_sess",
+        signature=SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
+        precedence=5,
+    )
+    scoped_theory.activate_scope("rec_scope_sess")
+    assert str(normalize(App("sum_to_sess", succ(zero_nat)), scoped_engine)) == "S(0)"
+    scoped_theory.deactivate_scope("rec_scope_sess")
+
+    with pytest.raises(ValueError):
+        register_recursive_definition(
+            scoped_engine,
+            "sum_to",
+            (),
+            scope="rec_scope",
+        )
+    with pytest.raises(ValueError):
+        register_recursive_definition(
+            scoped_engine,
+            "sum_to",
+            ((App("other_symbol", x_nat), x_nat),),
+            scope="rec_scope",
+        )
+    with pytest.raises(ValueError):
+        register_recursive_definition(
+            scoped_engine,
+            "double",
+            ((App("double", x_nat), add(x_nat, x_nat)),),
+            scope="rec_scope",
+        )
+    with pytest.raises(ValueError):
+        register_recursive_definition(
+            scoped_engine,
+            "badrec",
+            ((App("badrec", x_nat), App("badrec", succ(x_nat))),),
+            signature=SortSignature((TypeConst("Nat"),), TypeConst("Nat")),
+            scope="rec_scope",
+        )
+
     reflexive_clause = Clause((), eq(add(x, env["y"]), add(x, env["y"])))
     ok_refl, refl_cert = prove_checked(reflexive_clause, env["engine"], depth=6)
     assert ok_refl and refl_cert is not None

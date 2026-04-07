@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from .kernel import Engine, InductionScheme, Rule
+from .kernel import Engine, InductionScheme, Rule, SortSignature
 from .proof import (
     Clause,
     _check_exact_step,
@@ -296,6 +296,24 @@ class ProofSession:
         """Register a non-recursive definition rule in the theorem environment."""
 
         self.theory.register_definition(name, lhs, rhs, scope=scope)
+
+    def register_recursive_definition(
+        self,
+        name: str,
+        equations: Tuple[Tuple[Term, Term], ...],
+        scope: str = "definitions",
+        signature: Optional[SortSignature] = None,
+        precedence: Optional[int] = None,
+    ) -> None:
+        """Register recursive definition equations in the theorem environment."""
+
+        self.theory.register_recursive_definition(
+            name,
+            equations,
+            scope=scope,
+            signature=signature,
+            precedence=precedence,
+        )
 
     def register_lemma_rewrite(
         self,

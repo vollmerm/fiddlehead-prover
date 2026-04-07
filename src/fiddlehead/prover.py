@@ -95,6 +95,7 @@ from .theory import (
     load_theory_module,
     map_theory,
     nat_theory,
+    register_recursive_definition,
     theory_from_module,
     tree_theory,
 )
@@ -164,6 +165,7 @@ __all__ = [
     "install_theory",
     "TheoremEnvironment",
     "get_theorem_environment",
+    "register_recursive_definition",
     "ProofSession",
     "Trace",
 ]

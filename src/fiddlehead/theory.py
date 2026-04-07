@@ -282,6 +282,25 @@ def get_theorem_environment(engine: Engine) -> "TheoremEnvironment":
     return engine.theory
 
 
+def register_recursive_definition(
+    engine: Engine,
+    name: str,
+    equations: Tuple[Tuple[Term, Term], ...],
+    scope: str = "definitions",
+    signature: Optional[SortSignature] = None,
+    precedence: Optional[int] = None,
+) -> Tuple[Rule, ...]:
+    """Register recursive definition equations as scoped rewrite rules."""
+
+    return get_theorem_environment(engine).register_recursive_definition(
+        name,
+        equations,
+        scope=scope,
+        signature=signature,
+        precedence=precedence,
+    )
+
+
 def _parse_version(version: str) -> Tuple[int, ...]:
     parts = version.split(".")
     if any((not part) or (not part.isdigit()) for part in parts):
@@ -410,6 +429,7 @@ def _clone_theorem_environment(
     cloned = TheoremEnvironment(engine, list(source.base_rules))
     cloned.lemmas = dict(source.lemmas)
     cloned.definitions = dict(source.definitions)
+    cloned.recursive_definitions = dict(source.recursive_definitions)
     cloned.lemma_rewrites = dict(source.lemma_rewrites)
     cloned.scoped_rule_sets = {
         scope: list(rules) for scope, rules in source.scoped_rule_sets.items()
@@ -561,6 +581,7 @@ class TheoremEnvironment:
         self.base_rules: list[Rule] = list(base_rules)
         self.lemmas: Dict[str, Lemma] = {}
         self.definitions: Dict[str, Rule] = {}
+        self.recursive_definitions: Dict[str, Tuple[Rule, ...]] = {}
         self.lemma_rewrites: Dict[str, Rule] = {}
         self.scoped_rule_sets: Dict[str, list[Rule]] = {}
         self.active_scopes: set[str] = set()
@@ -660,6 +681,69 @@ class TheoremEnvironment:
         _validate_rule_sorts(rule, self.engine, f"definition {name}")
         self.definitions[name] = rule
         self._add_rule_to_scope(scope, rule)
+
+    def register_recursive_definition(
+        self,
+        name: str,
+        equations: Tuple[Tuple[Term, Term], ...],
+        scope: str = "definitions",
+        signature: Optional[SortSignature] = None,
+        precedence: Optional[int] = None,
+    ) -> Tuple[Rule, ...]:
+        """Register recursive definition equations as scoped rewrite rules."""
+
+        if not equations:
+            raise ValueError("Recursive definitions require at least one equation.")
+        if name in self.definitions:
+            raise ValueError(
+                f"Definition name already used by non-recursive definition: {name}"
+            )
+
+        if signature is not None:
+            register_sort_signature(self.engine, name, signature)
+        if precedence is not None:
+            existing_rank = self.engine.config.precedence.get(name)
+            if existing_rank is not None and existing_rank != precedence:
+                raise ValueError(
+                    f"Precedence conflict for {name}: existing {existing_rank} vs "
+                    f"requested {precedence}."
+                )
+            self.engine.config.precedence[name] = precedence
+        elif name not in self.engine.config.precedence:
+            base = max(self.engine.config.precedence.values(), default=0)
+            self.engine.config.precedence[name] = base + 1
+
+        rules: list[Rule] = []
+        for lhs, rhs in equations:
+            match lhs:
+                case Fun(symbol, _):
+                    if symbol != name:
+                        raise ValueError(
+                            f"Recursive definition lhs uses {symbol}, expected {name}."
+                        )
+                case _:
+                    raise ValueError(
+                        "Recursive definition lhs must be a function application."
+                    )
+            rule = Rule(lhs, rhs)
+            _validate_rule_sorts(rule, self.engine, f"recursive definition {name}")
+            if not _decreases(self.engine.config, lhs, rhs):
+                raise ValueError(
+                    f"Recursive definition equation is not decreasing: {lhs} -> {rhs}"
+                )
+            rules.append(rule)
+
+        existing = self.recursive_definitions.get(name)
+        registered = tuple(rules)
+        if existing is not None:
+            if existing != registered:
+                raise ValueError(f"Conflicting recursive definition for name: {name}")
+            return existing
+
+        self.recursive_definitions[name] = registered
+        for rule in registered:
+            self._add_rule_to_scope(scope, rule)
+        return registered
 
     def register_lemma_rewrite(
         self,

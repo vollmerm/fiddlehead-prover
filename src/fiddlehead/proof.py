@@ -26,6 +26,7 @@ from .syntax import App, Fun, Term, V, Var, apply_subst, false, true
 from .trace import ProofNode, ProofTrace, _new_node
 from .validation import _validate_clause_sorts, _validate_rule_sorts
 from .generalize import generalize_clause, ungeneralize_clause, GeneralizationMap
+from .select_induction import choose_induction_var
 
 
 @dataclass(frozen=True)
@@ -617,6 +618,85 @@ def prove_with_trace(
     root.note = "missing scheme for induction trace"
     root.solved = False
     return False, trace
+
+
+def prove_with_auto_induction(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    induction_depth: int = 1,
+    proof_node: Optional[ProofNode] = None,
+    generalize: bool = True,
+) -> tuple[bool, ProofTrace]:
+    """Run proof search with automatic induction variable selection.
+
+    This function selects the induction variable automatically using
+    heuristics (recursive call analysis, measure functions, type filtering).
+    If auto-selection fails, raises ValueError.
+
+    Args:
+        clause: The clause to prove.
+        engine: The proving engine.
+        depth: Maximum proof search depth.
+        induction_depth: Number of nested inductions allowed.
+        proof_node: Optional proof tree node for tracing.
+        generalize: If True, attempt generalization before induction.
+
+    Returns:
+        A tuple of (success, proof_trace).
+
+    Raises:
+        ValueError: If no suitable induction variable can be found.
+    """
+    auto_var = choose_induction_var(clause, engine)
+    sort = auto_var.sort
+    if sort is None:
+        raise ValueError(
+            f"Cannot auto-select induction scheme for variable {auto_var.name}: "
+            f"sort is None. Ensure the variable has a declared sort."
+        )
+    auto_scheme = get_induction_scheme(engine, sort + "-induction")
+    if auto_scheme is None:
+        auto_scheme = _get_scheme_for_sort(engine, sort)
+    if auto_scheme is None:
+        raise ValueError(
+            f"Cannot auto-select induction scheme for variable {auto_var.name} "
+            f"with sort {auto_var.sort}. Ensure a scheme is registered."
+        )
+
+    trace = ProofTrace()
+    root = proof_node if proof_node is not None else _new_node("prove", clause)
+    if proof_node is None:
+        trace.roots.append(root)
+
+    auto_node = _new_node(
+        "auto-induction-select",
+        clause,
+        note=f"auto-selected var={auto_var.name} with scheme={auto_scheme.name}",
+    )
+    root.children.append(auto_node)
+    root.solved = None
+
+    success = prove_with_induction(
+        clause,
+        engine,
+        auto_var,
+        auto_scheme,
+        depth=depth,
+        induction_depth=induction_depth,
+        proof_node=auto_node,
+        generalize=generalize,
+    )
+    root.solved = success
+    return success, trace
+
+
+def _get_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
+    """Get the induction scheme for a given sort."""
+    for scheme in engine.schemes.values():
+        if scheme.sort == sort:
+            return scheme
+    return None
 
 
 @dataclass(frozen=True)

@@ -31,8 +31,8 @@ class GeneralizationMap:
 
 
 def generalize_clause(
-    clause, engine: Engine, induction_var: Optional[Var] = None
-) -> Optional[Tuple]:
+    clause: Clause, engine: Engine, induction_var: Optional[Var] = None
+) -> Optional[Tuple[Clause, GeneralizationMap]]:
     """Generalize a clause by replacing rigid terms with fresh variables.
 
     Returns None if no generalization is needed (clause is not "rigid" enough
@@ -55,7 +55,7 @@ def generalize_clause(
     """
     from .proof import Clause
 
-    used_names: Set[str] = set()
+    used_names: Set[Term] = set()
     collect_rigid_terms(clause, engine, used_names, induction_var)
 
     if not used_names:
@@ -300,7 +300,7 @@ def ungeneralize_term(term: Term, gen_map: GeneralizationMap) -> Term:
     return apply_subst(term, subst)
 
 
-def ungeneralize_clause(clause, gen_map: GeneralizationMap):
+def ungeneralize_clause(clause: Clause, gen_map: GeneralizationMap) -> Clause:
     """Apply the inverse of a generalization to a clause.
 
     Args:

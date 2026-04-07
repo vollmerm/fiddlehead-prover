@@ -1,0 +1,247 @@
+"""Automatic induction variable selection heuristics.
+
+This module provides preliminary support for automatically choosing induction
+variables, letting users opt-in to auto-induction when they want the system to
+pick the best variable.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Dict, Optional, Set, Tuple
+
+from .kernel import Engine, InductionScheme, get_induction_scheme_for_sort
+from .syntax import Fun, Term, Var
+
+if TYPE_CHECKING:
+    from .proof import Clause
+
+
+def choose_induction_var(clause: Clause, engine: Engine) -> Var:
+    """Choose the best induction variable for a clause.
+
+    Args:
+        clause: The clause to analyze.
+        engine: The proving engine (for scheme lookup).
+
+    Returns:
+        The best variable to use for induction.
+
+    Raises:
+        ValueError: If no suitable induction variable can be found.
+    """
+    candidates = _collect_candidates(clause, engine)
+    if not candidates:
+        raise ValueError(
+            "No suitable induction variable found. Ensure your goal contains "
+            "variables of a sort with a registered induction scheme (Nat, List, Map, Tree)."
+        )
+
+    scored = [(var, _score_variable(var, clause, engine)) for var in candidates]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[0][0]
+
+
+def _collect_candidates(clause: Clause, engine: Engine) -> list[Var]:
+    """Collect all variables that could be induction candidates.
+
+    A variable is a candidate if:
+    1. Its sort has a registered induction scheme in the engine
+    2. It appears in the clause
+    """
+    candidates: list[Var] = []
+    seen: Set[str] = set()
+
+    for var in _vars_in_clause(clause):
+        if var.name in seen:
+            continue
+        if var.sort is None:
+            continue
+        if get_induction_scheme_for_sort(engine, var.sort) is None:
+            continue
+        seen.add(var.name)
+        candidates.append(var)
+
+    return candidates
+
+
+def _vars_in_clause(clause: Clause) -> list[Var]:
+    """Collect all variables appearing in a clause."""
+    result: list[Var] = []
+    _collect_vars(clause.goal, result)
+    for lhs, rhs in clause.assumptions:
+        _collect_vars(lhs, result)
+        _collect_vars(rhs, result)
+    for lhs, rhs in clause.disequalities:
+        _collect_vars(lhs, result)
+        _collect_vars(rhs, result)
+    return result
+
+
+def _collect_vars(term: Term, result: list[Var]) -> None:
+    """Collect variables from a term into result."""
+    match term:
+        case Var() as v:
+            result.append(v)
+        case Fun(_, args):
+            for arg in args:
+                _collect_vars(arg, result)
+
+
+def _score_variable(var: Var, clause: Clause, engine: Engine) -> int:
+    """Score a variable based on induction heuristics. Higher = better."""
+    score = 0
+
+    if _appears_in_conclusion(var, clause):
+        score += 10
+
+    if _is_at_recursive_position(var, clause, engine):
+        score += 8
+
+    if _appears_in_measure_function(var, clause):
+        score += 5
+
+    rec_calls = _get_recursive_calls(clause)
+    if _var_changes_in_recursive_call(var, rec_calls):
+        score += 12
+
+    if _var_is_not_in_assumptions_only(var, clause):
+        score += 3
+
+    return score
+
+
+def _appears_in_conclusion(var: Var, clause: Clause) -> bool:
+    """Check if variable appears in the top-level conclusion (goal)."""
+    return _contains_var(clause.goal, var)
+
+
+def _contains_var(term: Term, var: Var) -> bool:
+    """Check if term contains variable var."""
+    match term:
+        case Var() as v:
+            return v.name == var.name
+        case Fun(_, args):
+            return any(_contains_var(arg, var) for arg in args)
+    return False
+
+
+_RECURSIVE_SYMBOLS: Set[str] = {
+    "add",
+    "mul",
+    "length",
+    "append",
+    "reverse",
+    "mirror",
+    "flatten",
+    "get",
+    "put",
+}
+
+
+def _get_recursive_calls(clause: Clause) -> list[Tuple[str, Tuple[Term, ...]]]:
+    """Get all recursive function applications in the clause."""
+    calls: list[Tuple[str, Tuple[Term, ...]]] = []
+    _collect_calls(clause.goal, calls)
+    for lhs, rhs in clause.assumptions:
+        _collect_calls(lhs, calls)
+        _collect_calls(rhs, calls)
+    for lhs, rhs in clause.disequalities:
+        _collect_calls(lhs, calls)
+        _collect_calls(rhs, calls)
+    return calls
+
+
+def _collect_calls(term: Term, result: list[Tuple[str, Tuple[Term, ...]]]) -> None:
+    """Collect function applications from a term."""
+    match term:
+        case Var():
+            return
+        case Fun(symbol, args):
+            if symbol in _RECURSIVE_SYMBOLS:
+                result.append((symbol, args))
+            for arg in args:
+                _collect_calls(arg, result)
+
+
+def _var_changes_in_recursive_call(
+    var: Var, rec_calls: list[Tuple[str, Tuple[Term, ...]]]
+) -> bool:
+    """Check if variable changes in a recursive call (i.e., appears in a recursive position)."""
+    for symbol, args in rec_calls:
+        if _var_at_recursive_pos(var, symbol, args):
+            return True
+    return False
+
+
+def _var_at_recursive_pos(var: Var, symbol: str, args: Tuple[Term, ...]) -> bool:
+    """Check if var appears at a recursive position for the given symbol."""
+    scheme = _get_scheme_for_symbol(symbol)
+    if scheme is None:
+        return False
+
+    for constructor in scheme.constructors:
+        if constructor.symbol == symbol:
+            for pos in constructor.recursive_positions:
+                if pos < len(args) and _contains_var(args[pos], var):
+                    return True
+    return False
+
+
+def _get_scheme_for_symbol(symbol: str) -> Optional["InductionScheme"]:
+    """Get the induction scheme associated with a recursive symbol."""
+    from .kernel import Engine
+
+    return None
+
+
+_MEASURE_SYMBOLS: Set[str] = {"length", "size", "add", "depth", "count"}
+
+
+def _appears_in_measure_function(var: Var, clause: Clause) -> bool:
+    """Check if variable appears inside a measure function like length, size, etc."""
+    calls: list[Fun] = []
+    _collect_measure_calls(clause.goal, calls)
+    for lhs, rhs in clause.assumptions:
+        _collect_measure_calls(lhs, calls)
+        _collect_measure_calls(rhs, calls)
+    for lhs, rhs in clause.disequalities:
+        _collect_measure_calls(lhs, calls)
+        _collect_measure_calls(rhs, calls)
+
+    for call in calls:
+        for arg in call.args:
+            if _contains_var(arg, var):
+                return True
+    return False
+
+
+def _collect_measure_calls(term: Term, result: list[Fun]) -> None:
+    """Collect measure function applications from a term."""
+    match term:
+        case Var():
+            return
+        case Fun(symbol, args) as f:
+            if symbol in _MEASURE_SYMBOLS:
+                result.append(f)
+            for arg in args:
+                _collect_measure_calls(arg, result)
+
+
+def _is_at_recursive_position(var: Var, clause: Clause, engine: Engine) -> bool:
+    """Check if variable appears at a recursive destructor position in the goal."""
+    goal = clause.goal
+    match goal:
+        case Fun(symbol, args):
+            if _var_at_recursive_pos(var, symbol, args):
+                return True
+    return False
+
+
+def _var_is_not_in_assumptions_only(var: Var, clause: Clause) -> bool:
+    """Check if variable appears somewhere other than just assumptions."""
+    if _contains_var(clause.goal, var):
+        return True
+    for lhs, rhs in clause.disequalities:
+        if _contains_var(lhs, var) or _contains_var(rhs, var):
+            return True
+    return False

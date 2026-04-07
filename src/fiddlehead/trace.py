@@ -3,7 +3,7 @@ from __future__ import annotations
 """Tracing data structures for rewriting steps and proof trees."""
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, List, Protocol, Tuple
 
 from .syntax import Term
 
@@ -79,9 +79,9 @@ def render_proof_trace(trace: ProofTrace) -> str:
     return "\n".join(lines)
 
 
-WATERFALL_STAGES = [
+WATERFALL_STAGES: List[Tuple[str, Callable[[str], bool]]] = [
+    ("init", lambda k: "init" in k),
     ("simplify", lambda k: "simplify" in k),
-    ("generalize", lambda k: "generalize" in k),
     ("induct", lambda k: "induction" in k and "branch" not in k),
     ("branch", lambda k: "branch" in k),
     ("solve", lambda k: "solve" in k),

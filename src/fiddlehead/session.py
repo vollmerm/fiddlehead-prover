@@ -15,6 +15,7 @@ from .proof import (
     goal_equality,
     simplify_clause_with_stages,
 )
+from .select_induction import choose_induction_var
 from .syntax import Term, Var, true
 from .theory import Lemma, _select_induction_scheme, get_theorem_environment
 from .trace import ProofNode, ProofTrace, _new_node
@@ -91,7 +92,9 @@ class ProofSession:
             raise ValueError("No goals left.")
         original = self.goals[0]
         simplified, stage_data = simplify_clause_with_stages(original, self.engine)
-        stage_nodes = [_new_node(f"stage-{name}", clause) for name, clause in stage_data]
+        stage_nodes = [
+            _new_node(f"stage-{name}", clause) for name, clause in stage_data
+        ]
         if clause_solved(simplified):
             self._record(
                 "session-simp",
@@ -117,8 +120,13 @@ class ProofSession:
             raise ValueError("No goals left.")
         original = self.goals[0]
         branches = _check_split_step(original)
-        kids = [_new_node("session-branch", branch, note=f"index={index}") for index, branch in enumerate(branches)]
-        self._record("session-split", original, note=f"branches={len(branches)}", children=kids)
+        kids = [
+            _new_node("session-branch", branch, note=f"index={index}")
+            for index, branch in enumerate(branches)
+        ]
+        self._record(
+            "session-split", original, note=f"branches={len(branches)}", children=kids
+        )
         self._replace_current(branches)
 
     def induct(
@@ -132,9 +140,14 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        chosen = _select_induction_scheme(self.engine, var, scheme=scheme, scheme_name=scheme_name)
+        chosen = _select_induction_scheme(
+            self.engine, var, scheme=scheme, scheme_name=scheme_name
+        )
         branches = _check_induction_step(original, var, chosen, self.engine)
-        kids = [_new_node("induction-branch", branch, note=f"index={index}") for index, branch in enumerate(branches)]
+        kids = [
+            _new_node("induction-branch", branch, note=f"index={index}")
+            for index, branch in enumerate(branches)
+        ]
         self._record(
             "session-induct",
             original,
@@ -173,13 +186,46 @@ class ProofSession:
             plan.append((var.name, chosen.name))
             next_pending: list[Clause] = []
             for clause in pending:
-                next_pending.extend(_check_induction_step(clause, var, chosen, self.engine))
+                next_pending.extend(
+                    _check_induction_step(clause, var, chosen, self.engine)
+                )
             pending = next_pending
 
-        kids = [_new_node("induction-branch", branch, note=f"index={index}") for index, branch in enumerate(pending)]
+        kids = [
+            _new_node("induction-branch", branch, note=f"index={index}")
+            for index, branch in enumerate(pending)
+        ]
         note = ", ".join(f"{name}:{scheme_name}" for name, scheme_name in plan)
         self._record("session-induct-many", original, note=note, children=kids)
         self._replace_current(pending)
+
+    def auto_induct(self) -> None:
+        """Apply induction with automatic variable selection.
+
+        The variable is chosen using heuristics (recursive call analysis,
+        measure functions, type filtering). Raises ValueError if no
+        suitable variable can be found.
+
+        Raises:
+            ValueError: If no suitable induction variable can be found.
+        """
+        if not self.goals:
+            raise ValueError("No goals left.")
+        original = self.goals[0]
+        auto_var = choose_induction_var(original, self.engine)
+        scheme = _select_induction_scheme(self.engine, auto_var)
+        branches = _check_induction_step(original, auto_var, scheme, self.engine)
+        kids = [
+            _new_node("induction-branch", branch, note=f"index={index}")
+            for index, branch in enumerate(branches)
+        ]
+        self._record(
+            "session-auto-induct",
+            original,
+            note=f"auto-selected var={auto_var.name}, scheme={scheme.name}",
+            children=kids,
+        )
+        self._replace_current(branches)
 
     def rewrite(self, rule: Rule) -> None:
         """Rewrite the current goal once using ``rule``."""
@@ -203,10 +249,14 @@ class ProofSession:
             raise ValueError("No goals left.")
         original = self.goals[0]
         solved = _check_exact_step(original, self.engine)
-        self._record("session-exact", original, solved=True, children=[_new_node("goal", solved)])
+        self._record(
+            "session-exact", original, solved=True, children=[_new_node("goal", solved)]
+        )
         self.goals = self.goals[1:]
 
-    def register_lemma(self, lemma: Lemma, depth: int = 12, induction_depth: int = 2) -> None:
+    def register_lemma(
+        self, lemma: Lemma, depth: int = 12, induction_depth: int = 2
+    ) -> None:
         """Register a proved lemma in the session theorem environment."""
 
         self.theory.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
@@ -255,7 +305,9 @@ class ProofSession:
     ) -> None:
         """Register a lemma as an oriented rewrite rule."""
 
-        self.theory.register_lemma_rewrite(lemma_name, scope=scope, orientation=orientation)
+        self.theory.register_lemma_rewrite(
+            lemma_name, scope=scope, orientation=orientation
+        )
 
     def activate_scope(self, name: str) -> None:
         """Activate a theorem scope and sync engine rules."""

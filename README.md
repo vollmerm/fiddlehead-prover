@@ -26,6 +26,9 @@ The recommended entrypoint is:
 from fiddlehead import *
 ```
 
+For a workflow-oriented guide to the core public API used by the example
+proofs, see [`docs/public-api.md`](docs/public-api.md).
+
 ## Examples
 
 This example installs a small natural-number theory, normalizes a term, and proves a basic identity by induction.

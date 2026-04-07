@@ -77,3 +77,55 @@ def render_proof_trace(trace: ProofTrace) -> str:
     for root in trace.roots:
         visit(root, 0)
     return "\n".join(lines)
+
+
+WATERFALL_STAGES = [
+    ("simplify", lambda k: "simplify" in k),
+    ("generalize", lambda k: "generalize" in k),
+    ("induct", lambda k: "induction" in k and "branch" not in k),
+    ("branch", lambda k: "branch" in k),
+    ("solve", lambda k: "solve" in k),
+]
+
+
+def _get_stage(kind: str) -> str:
+    for stage, matcher in WATERFALL_STAGES:
+        if matcher(kind.lower()):
+            return stage
+    return ""
+
+
+def render_waterfall_trace(trace: ProofTrace) -> str:
+    """Render a waterfall view of a ``ProofTrace`` showing proof stages.
+
+    Displays the proof as a series of stages with arrows showing the flow:
+    prove → simplify → generalize → induct → branch → solve
+    """
+
+    lines: list[str] = []
+
+    def visit(node: ProofNode, indent: int) -> None:
+        pad = "  " * indent
+        status = ""
+        if node.solved is True:
+            status = " [solved]"
+        elif node.solved is False:
+            status = " [failed]"
+
+        current_stage = _get_stage(node.kind)
+        note = f" :: {node.note}" if node.note else ""
+        goal_str = str(node.clause.goal)
+
+        if current_stage:
+            lines.append(f"{pad}→ {current_stage}{status}{note} -> {goal_str}")
+        else:
+            lines.append(f"{pad}→ {node.kind}{status}{note} -> {goal_str}")
+
+        for child in node.children or []:
+            visit(child, indent + 1)
+
+    for root in trace.roots:
+        lines.append(f"prove -> {root.clause.goal}")
+        for child in root.children or []:
+            visit(child, 1)
+    return "\n".join(lines)

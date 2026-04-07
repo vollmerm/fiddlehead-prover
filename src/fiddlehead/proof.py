@@ -459,6 +459,14 @@ def prove_with_induction(
         gen_result = generalize_clause(clause, engine, induction_var=var)
         if gen_result is not None:
             generalized_clause, gen_map = gen_result
+            if proof_node is not None:
+                gen_node = _new_node(
+                    "generalize",
+                    clause,
+                    note=f"var={var.name}, scheme={scheme.name}",
+                )
+                proof_node.children.append(gen_node)
+                proof_node.solved = None
             generalized_result = _prove_induction_on_clause(
                 generalized_clause,
                 engine,
@@ -466,7 +474,7 @@ def prove_with_induction(
                 scheme,
                 depth,
                 induction_depth,
-                proof_node,
+                gen_node if proof_node is not None else None,
                 f"var={var.name}, scheme={scheme.name}, generalized",
             )
             if generalized_result:

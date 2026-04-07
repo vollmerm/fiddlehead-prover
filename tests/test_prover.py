@@ -446,6 +446,12 @@ def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
     assert "session-simp" in sess_trace_rendered
     assert "session-exact" in sess_trace_rendered
 
+    waterfall_rendered = render_waterfall_trace(ptrace)
+    assert "simplify" in waterfall_rendered
+    assert "induct" in waterfall_rendered
+    assert "branch" in waterfall_rendered
+    assert "prove ->" in waterfall_rendered
+
 
 def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
     add = env["add"]

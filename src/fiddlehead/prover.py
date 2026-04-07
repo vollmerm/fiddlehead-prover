@@ -77,7 +77,13 @@ from .proof import (
 )
 from .session import ProofSession
 from .syntax import App, Const, V, apply_subst, false, match, reset_var_interner, true
-from .trace import ProofNode, ProofTrace, Trace, render_proof_trace
+from .trace import (
+    ProofNode,
+    ProofTrace,
+    Trace,
+    render_proof_trace,
+    render_waterfall_trace,
+)
 from .theory import (
     Lemma,
     TheoremEnvironment,
@@ -143,6 +149,7 @@ __all__ = [
     "ProofTrace",
     "ProofNode",
     "render_proof_trace",
+    "render_waterfall_trace",
     "prove_with_trace",
     "ProofCertificate",
     "certificate_to_proof_trace",

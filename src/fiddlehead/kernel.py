@@ -42,11 +42,21 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Rule:
-    """A rewrite rule with optional equational side conditions."""
+    """A rewrite rule with optional equational side conditions.
+
+    Attributes:
+        lhs: Left-hand side pattern to match
+        rhs: Right-hand side replacement
+        conditions: Optional side conditions that must hold for the rule to apply
+        skip_decrease_check: If True, skip the termination (decrease) check.
+            Use this for induction hypothesis rules, lemmas, and other context rules
+            where the decrease heuristic may incorrectly reject valid rewrites.
+    """
 
     lhs: Term
     rhs: Term
     conditions: Tuple[Tuple[Term, Term], ...] = ()
+    skip_decrease_check: bool = False
 
 
 class RuleIndex:
@@ -95,9 +105,19 @@ def builtin_rules() -> list[Rule]:
 
 @dataclass(frozen=True)
 class Context:
-    """Local assumptions used for contextual equality reasoning."""
+    """Local assumptions used for contextual equality reasoning.
 
-    equalities: Tuple[Tuple[Term, Term], ...] = ()
+    Equalities are split into three categories:
+    - substitutions: equalities where at least one side is a bare variable (x = t)
+      These act as local bindings and go into EqClasses for substitution behavior.
+    - ground_equalities: equalities with no variables, used for EqClasses congruence closure
+    - rewrite_equalities: equalities requiring matching to apply (f(x) = g(x), IH-style)
+      These become rewrite rules but do NOT go into EqClasses.
+    """
+
+    substitutions: Tuple[Tuple[Term, Term], ...] = ()
+    ground_equalities: Tuple[Tuple[Term, Term], ...] = ()
+    rewrite_equalities: Tuple[Tuple[Term, Term], ...] = ()
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
 
@@ -280,7 +300,11 @@ class EqClasses:
 
 def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClasses:
     eq_classes = EqClasses()
-    for left, right in ctx.equalities:
+    for left, right in ctx.substitutions:
+        eq_classes._register(left)
+        eq_classes._register(right)
+        eq_classes.union(left, right)
+    for left, right in ctx.ground_equalities:
         eq_classes._register(left)
         eq_classes._register(right)
         eq_classes.union(left, right)
@@ -293,16 +317,21 @@ def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqCla
     return eq_classes
 
 
-def _context_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
-    for lhs, rhs in ctx.equalities:
+def _schematic_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
+    """Yield rewrite rules from context equalities that require pattern matching.
+
+    Induction hypothesis rules and lemmas are oriented into rules and marked
+    to skip the decrease check, since the heuristic may incorrectly reject them.
+    """
+    for lhs, rhs in ctx.rewrite_equalities:
         if _decreases(config, lhs, rhs):
-            yield Rule(lhs, rhs)
+            yield Rule(lhs, rhs, skip_decrease_check=True)
         elif _decreases(config, rhs, lhs):
-            yield Rule(rhs, lhs)
+            yield Rule(rhs, lhs, skip_decrease_check=True)
         elif _term_key(lhs) <= _term_key(rhs):
-            yield Rule(rhs, lhs)
+            yield Rule(rhs, lhs, skip_decrease_check=True)
         else:
-            yield Rule(lhs, rhs)
+            yield Rule(lhs, rhs, skip_decrease_check=True)
 
 
 def _ac_normalize(config: EngineConfig, term: Term) -> Term:
@@ -527,7 +556,7 @@ class Engine:
         if rule.conditions and not self.conditions_hold(rule.conditions, subst):
             return None
         new_term = apply_subst(rule.rhs, subst)
-        if not rule.conditions:
+        if not rule.conditions and not rule.skip_decrease_check:
             symbol = getattr(term, "symbol", None)
             ac_symbols = self.config.assoc | self.config.comm
             if symbol in ac_symbols:
@@ -579,7 +608,7 @@ class Engine:
                 self.memo[term] = rewritten
                 return rewritten
 
-        for rule in _context_rules(self.ctx, self.config):
+        for rule in _schematic_rules(self.ctx, self.config):
             rewritten = self.rewrite_once(term, rule)
             if rewritten is not None:
                 self.memo[term] = rewritten
@@ -618,7 +647,14 @@ class Engine:
 
         saved_ctx = self.ctx
         saved_eq = self.eq_classes
-        saved_memo = self.memo if ctx.equalities or ctx.disequalities else None
+        saved_memo = (
+            self.memo
+            if ctx.substitutions
+            or ctx.ground_equalities
+            or ctx.rewrite_equalities
+            or ctx.disequalities
+            else None
+        )
         self.ctx = ctx
         self.eq_classes = None
         if saved_memo is not None:
@@ -636,7 +672,14 @@ class Engine:
 
         saved_ctx = self.ctx
         saved_eq = self.eq_classes
-        saved_memo = self.memo if ctx.equalities or ctx.disequalities else None
+        saved_memo = (
+            self.memo
+            if ctx.substitutions
+            or ctx.ground_equalities
+            or ctx.rewrite_equalities
+            or ctx.disequalities
+            else None
+        )
         self.ctx = ctx
         self.eq_classes = None
         if saved_memo is not None:

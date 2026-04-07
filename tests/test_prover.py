@@ -987,3 +987,39 @@ def test_ac_and_non_ac_mixed_normalization() -> None:
 
     t2 = add(zero, S(zero))
     assert str(normalize(t2, engine)) == "S(0)"
+
+
+def test_context_equality_classification() -> None:
+    """Test that ground, substitution, and rewrite equalities are properly classified."""
+    from fiddlehead.proof import _build_context
+    from fiddlehead.kernel import is_ground, _build_eq_classes, _schematic_rules
+
+    reset_var_interner()
+    x = V("x")
+    y = V("y")
+    zero = Const("0")
+    succ_x = App("S", x)
+    succ_zero = App("S", zero)
+
+    ground_eq = (zero, succ_zero)
+    rewrite_eq = (succ_x, App("S", App("S", x)))
+    substitution_eq = (x, zero)
+
+    assert is_ground(ground_eq[0]) and is_ground(ground_eq[1])
+    assert not is_ground(rewrite_eq[0]) or not is_ground(rewrite_eq[1])
+    assert not is_ground(substitution_eq[0]) or not is_ground(substitution_eq[1])
+
+    ctx = _build_context((ground_eq, rewrite_eq, substitution_eq), ())
+    assert ctx.substitutions == ((x, zero),)
+    assert ctx.ground_equalities == ((zero, succ_zero),)
+    assert ctx.rewrite_equalities == ((succ_x, App("S", App("S", x))),)
+
+    ec = _build_eq_classes(ctx)
+    assert ec.are_equal(zero, succ_zero)
+    assert ec.are_equal(x, zero)
+
+    rules = list(_schematic_rules(ctx, default_engine_config()))
+    assert len(rules) == 1
+    for rule in rules:
+        assert not isinstance(rule.lhs, Var)
+    assert all(rule.skip_decrease_check for rule in rules)

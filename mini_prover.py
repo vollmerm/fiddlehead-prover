@@ -20,12 +20,14 @@ from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple, TypeAlia
 
 class Term:
     """Base marker type for all term nodes."""
+
     pass
 
 
 @dataclass(frozen=True, slots=True)
 class Var(Term):
     """A logical variable with an optional sort tag."""
+
     name: str
     sort: Optional[str] = None
 
@@ -36,6 +38,7 @@ class Var(Term):
 @dataclass(frozen=True, slots=True)
 class Fun(Term):
     """A function symbol applied to zero or more argument terms."""
+
     symbol: str
     args: Tuple[Term, ...]
 
@@ -107,7 +110,9 @@ def apply_subst(term: Term, subst: Subst) -> Term:
     raise TypeError(f"Unsupported term: {term!r}")
 
 
-def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optional[Subst]:
+def match(
+    pattern: Term, target: Term, subst: Optional[Subst] = None
+) -> Optional[Subst]:
     """
     First-order pattern matching.
 
@@ -141,9 +146,11 @@ def match(pattern: Term, target: Term, subst: Optional[Subst] = None) -> Optiona
 @dataclass(frozen=True)
 class Rule:
     """A rewrite rule, optionally guarded by equality conditions."""
+
     lhs: Term
     rhs: Term
     conditions: Tuple[Tuple[Term, Term], ...] = ()
+    skip_decrease_check: bool = False
 
 
 class RuleIndex:
@@ -171,14 +178,24 @@ class RuleIndex:
 
 @dataclass(frozen=True)
 class Context:
-    """Local assumptions: equalities and disequalities available during normalization."""
-    equalities: Tuple[Tuple[Term, Term], ...] = ()
+    """Local assumptions: equalities and disequalities available during normalization.
+
+    Equalities are split into three categories:
+    - substitutions: equalities where at least one side is a bare variable (x = t)
+    - ground_equalities: equalities with no variables, for EqClasses congruence closure
+    - rewrite_equalities: equalities requiring matching (f(x) = g(x), IH-style), for rules
+    """
+
+    substitutions: Tuple[Tuple[Term, Term], ...] = ()
+    ground_equalities: Tuple[Tuple[Term, Term], ...] = ()
+    rewrite_equalities: Tuple[Tuple[Term, Term], ...] = ()
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
 
 @dataclass(frozen=True)
 class EngineConfig:
     """Configuration for ordering and AC normalization behavior."""
+
     precedence: Dict[str, int]
     assoc: set[str]
     comm: set[str]
@@ -229,7 +246,9 @@ def _lpo_greater(config: EngineConfig, s: Term, t: Term) -> bool:
         case Fun(f, s_args), Fun(g, t_args):
             if any(_lpo_greater(config, si, t) or si == t for si in s_args):
                 return True
-            if _prec(config, f) > _prec(config, g) and all(_lpo_greater(config, s, ti) for ti in t_args):
+            if _prec(config, f) > _prec(config, g) and all(
+                _lpo_greater(config, s, ti) for ti in t_args
+            ):
                 return True
             if f == g:
                 for si, ti in zip(s_args, t_args):
@@ -397,7 +416,11 @@ class EqClasses:
 def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqClasses:
     """Build equality classes from context assumptions plus optional extra terms."""
     eq = EqClasses()
-    for l, r in ctx.equalities:
+    for l, r in ctx.substitutions:
+        eq._register(l)
+        eq._register(r)
+        eq.union(l, r)
+    for l, r in ctx.ground_equalities:
         eq._register(l)
         eq._register(r)
         eq.union(l, r)
@@ -410,13 +433,14 @@ def _build_eq_classes(ctx: Context, extra_terms: Tuple[Term, ...] = ()) -> EqCla
     return eq
 
 
-def _context_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
-    """
-    Turn context equalities (including IH assumptions) into oriented rewrite rules.
+def _schematic_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
+    """Yield contextual rewrite rules from complex equalities.
 
-    Variable-lhs rules are skipped to avoid over-aggressive global rewrites.
+    Induction hypothesis rules and lemmas skip the decrease check since
+    the termination heuristic may incorrectly reject them.
+    Variable-lhs rules are skipped to avoid over-aggressive rewriting.
     """
-    for lhs, rhs in ctx.equalities:
+    for lhs, rhs in ctx.rewrite_equalities:
         oriented_lhs: Term
         oriented_rhs: Term
         if _decreases(config, lhs, rhs):
@@ -433,7 +457,7 @@ def _context_rules(ctx: Context, config: EngineConfig) -> Iterator[Rule]:
         # match arbitrary terms and can over-rewrite entire goals.
         if isinstance(oriented_lhs, Var):
             continue
-        yield Rule(oriented_lhs, oriented_rhs)
+        yield Rule(oriented_lhs, oriented_rhs, skip_decrease_check=True)
 
 
 def builtin_rules() -> list[Rule]:
@@ -458,9 +482,41 @@ def is_ground(t: Term) -> bool:
     raise TypeError(f"Unsupported term: {t!r}")
 
 
+def _build_context(
+    assumptions: Tuple[Tuple[Term, Term], ...],
+    disequalities: Tuple[Tuple[Term, Term], ...],
+) -> Context:
+    """Classify clause assumptions into substitutions, ground equalities, and rewrite rules.
+
+    - **substitutions**: where at least one side is a bare variable (e.g., x = nil)
+    - **ground_equalities**: between ground (variable-free) terms
+    - **rewrite_equalities**: complex equalities like induction hypotheses
+
+    Substitutions and ground equalities go into EqClasses for congruence closure.
+    Rewrite equalities become contextual rewrite rules.
+    """
+    substitutions: list[Tuple[Term, Term]] = []
+    ground_equalities: list[Tuple[Term, Term]] = []
+    rewrite_equalities: list[Tuple[Term, Term]] = []
+    for lhs, rhs in assumptions:
+        if isinstance(lhs, Var) or isinstance(rhs, Var):
+            substitutions.append((lhs, rhs))
+        elif is_ground(lhs) and is_ground(rhs):
+            ground_equalities.append((lhs, rhs))
+        else:
+            rewrite_equalities.append((lhs, rhs))
+    return Context(
+        substitutions=tuple(substitutions),
+        ground_equalities=tuple(ground_equalities),
+        rewrite_equalities=tuple(rewrite_equalities),
+        disequalities=disequalities,
+    )
+
+
 @dataclass
 class TraceStep:
     """One low-level rewrite step recorded in the rewrite trace."""
+
     before: Term
     after: Term
     rule: Rule
@@ -481,6 +537,7 @@ class Trace:
 @dataclass(frozen=True)
 class Clause:
     """A proof obligation: assumptions imply a goal term."""
+
     assumptions: Tuple[Tuple[Term, Term], ...]
     goal: Term
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
@@ -489,6 +546,7 @@ class Clause:
 @dataclass(frozen=True)
 class InductionConstructor:
     """One constructor in an induction scheme plus positions that are recursive."""
+
     symbol: str
     arity: int
     recursive_positions: Tuple[int, ...] = ()
@@ -497,6 +555,7 @@ class InductionConstructor:
 @dataclass(frozen=True)
 class InductionScheme:
     """Induction recipe for a sort: base terms and step constructors."""
+
     name: str
     sort: str
     base_terms: Tuple[Term, ...]
@@ -506,6 +565,7 @@ class InductionScheme:
 @dataclass
 class ProofNode:
     """Node in a high-level proof-structure tree."""
+
     kind: str
     clause: Clause
     note: str = ""
@@ -516,6 +576,7 @@ class ProofNode:
 @dataclass
 class ProofTrace:
     """Top-level container for proof trees."""
+
     roots: list[ProofNode] = field(default_factory=list)
 
 
@@ -566,7 +627,14 @@ def configure_prover(
     """
     Set the global rules, context, tracing, and induction schemes used by the prover.
     """
-    global GLOBAL_RULES, GLOBAL_RULE_INDEX, GLOBAL_CONTEXT, GLOBAL_TRACE, GLOBAL_FUEL, GLOBAL_CONFIG, GLOBAL_SCHEMES
+    global \
+        GLOBAL_RULES, \
+        GLOBAL_RULE_INDEX, \
+        GLOBAL_CONTEXT, \
+        GLOBAL_TRACE, \
+        GLOBAL_FUEL, \
+        GLOBAL_CONFIG, \
+        GLOBAL_SCHEMES
     GLOBAL_RULES = list(rules)
     GLOBAL_RULE_INDEX = RuleIndex(GLOBAL_RULES)
     GLOBAL_CONTEXT = ctx
@@ -637,7 +705,9 @@ def _rewrite_once(
     subst = match(rule.lhs, term)
     if subst is None:
         return None
-    if rule.conditions and not _conditions_hold(rule.conditions, subst, rules, rule_index, ctx, trace, fuel, config):
+    if rule.conditions and not _conditions_hold(
+        rule.conditions, subst, rules, rule_index, ctx, trace, fuel, config
+    ):
         return None
     new = apply_subst(rule.rhs, subst)
     if not rule.conditions and not _decreases(config, term, new):
@@ -669,7 +739,10 @@ def _rewrite_term(
 
     match term:
         case Fun(f, args):
-            args2 = tuple(_rewrite_term(a, rules, rule_index, ctx, trace, fuel, config) for a in args)
+            args2 = tuple(
+                _rewrite_term(a, rules, rule_index, ctx, trace, fuel, config)
+                for a in args
+            )
             term = Fun(f, args2)
 
     term = _ac_normalize(config, term)
@@ -692,7 +765,7 @@ def _rewrite_term(
         if t2 is not None:
             return t2
 
-    for r in _context_rules(ctx, config):
+    for r in _schematic_rules(ctx, config):
         t2 = _rewrite_once(term, r, rules, rule_index, ctx, trace, fuel, config)
         if t2 is not None:
             return t2
@@ -720,10 +793,20 @@ def _normalize_with(
 
 def normalize(term: Term) -> Term:
     """Public normalization entry point using current global prover configuration."""
-    return _normalize_with(term, GLOBAL_RULES, GLOBAL_RULE_INDEX, GLOBAL_CONTEXT, GLOBAL_TRACE, GLOBAL_FUEL, GLOBAL_CONFIG)
+    return _normalize_with(
+        term,
+        GLOBAL_RULES,
+        GLOBAL_RULE_INDEX,
+        GLOBAL_CONTEXT,
+        GLOBAL_TRACE,
+        GLOBAL_FUEL,
+        GLOBAL_CONFIG,
+    )
 
 
-def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") -> InductionScheme:
+def nat_induction_scheme(
+    zero: Optional[Term] = None, succ_symbol: str = "S"
+) -> InductionScheme:
     """Standard unary natural-number induction scheme."""
     if zero is None:
         zero = Const("0")
@@ -735,7 +818,9 @@ def nat_induction_scheme(zero: Optional[Term] = None, succ_symbol: str = "S") ->
     )
 
 
-def list_induction_scheme(nil_symbol: str = "nil", cons_symbol: str = "cons") -> InductionScheme:
+def list_induction_scheme(
+    nil_symbol: str = "nil", cons_symbol: str = "cons"
+) -> InductionScheme:
     """Standard list induction scheme (recursive in tail position)."""
     return InductionScheme(
         name="list",
@@ -795,8 +880,12 @@ def vars_in_clause(clause: Clause) -> set[str]:
 
 def instantiate_clause(clause: Clause, subst: Subst) -> Clause:
     """Apply a substitution to both assumptions and goal of a clause."""
-    assumptions = tuple((apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.assumptions)
-    disequalities = tuple((apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.disequalities)
+    assumptions = tuple(
+        (apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.assumptions
+    )
+    disequalities = tuple(
+        (apply_subst(l, subst), apply_subst(r, subst)) for l, r in clause.disequalities
+    )
     goal = apply_subst(clause.goal, subst)
     return Clause(assumptions, goal, disequalities)
 
@@ -820,7 +909,9 @@ def fresh_var(base: str, used_names: set[str], sort: Optional[str] = None) -> Va
         i += 1
 
 
-def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> list[Clause]:
+def induction_branches(
+    clause: Clause, var: Var, scheme: InductionScheme
+) -> list[Clause]:
     """
     Expand one induction step into concrete branch clauses.
 
@@ -836,7 +927,10 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
         branches.append(instantiate_clause(clause, {var: b}))
 
     for cons in scheme.constructors:
-        rec_vars = [fresh_var(f"{var.name}_ih", used, scheme.sort) for _ in cons.recursive_positions]
+        rec_vars = [
+            fresh_var(f"{var.name}_ih", used, scheme.sort)
+            for _ in cons.recursive_positions
+        ]
         ih_assumptions: list[Tuple[Term, Term]] = []
         for rv in rec_vars:
             ih_goal = instantiate_clause(clause, {var: rv}).goal
@@ -845,7 +939,9 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
                 return []
             ih_assumptions.append(eq)
 
-        args: list[Term] = [fresh_var(f"{var.name}_{cons.symbol}_arg", used) for _ in range(cons.arity)]
+        args: list[Term] = [
+            fresh_var(f"{var.name}_{cons.symbol}_arg", used) for _ in range(cons.arity)
+        ]
         for pos, rv in zip(cons.recursive_positions, rec_vars):
             args[pos] = rv
 
@@ -864,7 +960,7 @@ def induction_branches(clause: Clause, var: Var, scheme: InductionScheme) -> lis
 
 def simplify_clause(clause: Clause) -> Clause:
     """Normalize a clause goal under the clause assumptions as local context."""
-    local_ctx = Context(clause.assumptions, clause.disequalities)
+    local_ctx = _build_context(clause.assumptions, clause.disequalities)
     new_goal = _normalize_with(
         clause.goal,
         GLOBAL_RULES,
@@ -916,7 +1012,9 @@ def split_clause(clause: Clause) -> list[Clause]:
             return [clause]
 
 
-InductionHandler: TypeAlias = Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
+InductionHandler: TypeAlias = Callable[
+    [Clause, int, Optional[ProofNode]], Optional[bool]
+]
 
 
 def _prove_kernel(
@@ -963,14 +1061,18 @@ def _prove_kernel(
         child = _new_node("branch", branch, note=f"index={i}")
         if proof_node is not None:
             proof_node.children.append(child)
-        branch_results.append(_prove_kernel(branch, next_depth, induction_handler, child))
+        branch_results.append(
+            _prove_kernel(branch, next_depth, induction_handler, child)
+        )
     out = all(branch_results)
     if proof_node is not None:
         proof_node.solved = out
     return out
 
 
-def prove(clause: Clause, depth: int = 5, proof_node: Optional[ProofNode] = None) -> bool:
+def prove(
+    clause: Clause, depth: int = 5, proof_node: Optional[ProofNode] = None
+) -> bool:
     """Plain proof search without induction."""
     return _prove_kernel(clause, depth, proof_node=proof_node)
 
@@ -998,7 +1100,9 @@ def prove_with_induction(
         branches = induction_branches(simplified_clause, var, scheme)
         if not branches:
             return False
-        induction_node = _new_node("induction", simplified_clause, note=f"var={var.name}, scheme={scheme.name}")
+        induction_node = _new_node(
+            "induction", simplified_clause, note=f"var={var.name}, scheme={scheme.name}"
+        )
         if current_node is not None:
             current_node.children.append(induction_node)
         next_induction = induction_depth - 1
@@ -1006,7 +1110,11 @@ def prove_with_induction(
         for i, branch in enumerate(branches):
             child = _new_node("induction-branch", branch, note=f"index={i}")
             induction_node.children.append(child)
-            branch_results.append(prove_with_induction(branch, var, scheme, current_depth, next_induction, child))
+            branch_results.append(
+                prove_with_induction(
+                    branch, var, scheme, current_depth, next_induction, child
+                )
+            )
         induction_node.solved = all(branch_results)
         return induction_node.solved
 
@@ -1048,11 +1156,23 @@ def prove_with_trace(
         ok = prove(clause, depth=depth, proof_node=root)
         return ok, trace
     if scheme is not None:
-        ok = prove_with_induction(clause, var, scheme, depth=depth, induction_depth=induction_depth, proof_node=root)
+        ok = prove_with_induction(
+            clause,
+            var,
+            scheme,
+            depth=depth,
+            induction_depth=induction_depth,
+            proof_node=root,
+        )
         return ok, trace
     if scheme_name is not None:
         ok = prove_with_registered_induction(
-            clause, var, scheme_name, depth=depth, induction_depth=induction_depth, proof_node=root
+            clause,
+            var,
+            scheme_name,
+            depth=depth,
+            induction_depth=induction_depth,
+            proof_node=root,
         )
         return ok, trace
 
@@ -1202,15 +1322,22 @@ if __name__ == "__main__":
     register_induction_scheme(list_scheme)
     assert get_induction_scheme("nat") is nat_scheme
     assert get_induction_scheme_for_sort("List") is list_scheme
-    assert prove_with_registered_induction(clause4, x_nat, "nat", depth=8, induction_depth=1)
-    assert not prove_with_registered_induction(clause4, x_nat, "list", depth=8, induction_depth=1)
+    assert prove_with_registered_induction(
+        clause4, x_nat, "nat", depth=8, induction_depth=1
+    )
+    assert not prove_with_registered_induction(
+        clause4, x_nat, "list", depth=8, induction_depth=1
+    )
 
     # List induction branch shape.
     list_goal = Clause((), eq(app(xs, nil), xs))
     list_branches = induction_branches(list_goal, xs, list_scheme)
     assert len(list_branches) == 2
     assert str(list_branches[0].goal) == "eq(append(nil, nil), nil)"
-    assert str(list_branches[1].goal) == "eq(append(cons(xs_cons_arg_0, xs_ih_0), nil), cons(xs_cons_arg_0, xs_ih_0))"
+    assert (
+        str(list_branches[1].goal)
+        == "eq(append(cons(xs_cons_arg_0, xs_ih_0), nil), cons(xs_cons_arg_0, xs_ih_0))"
+    )
     assert len(list_branches[1].assumptions) == 1
     ih_l2, ih_r2 = list_branches[1].assumptions[0]
     assert str(ih_l2) == "append(xs_ih_0, nil)"
@@ -1223,15 +1350,21 @@ if __name__ == "__main__":
     ys = V("ys", "List")
     zs = V("zs", "List")
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
-    assert prove_with_induction(assoc_goal, xs, list_scheme, depth=12, induction_depth=1)
+    assert prove_with_induction(
+        assoc_goal, xs, list_scheme, depth=12, induction_depth=1
+    )
 
     # Length is preserved by appending `nil`.
     len_append_nil_goal = Clause((), eq(length(app(xs, nil)), length(xs)))
-    assert prove_with_induction(len_append_nil_goal, xs, list_scheme, depth=12, induction_depth=1)
+    assert prove_with_induction(
+        len_append_nil_goal, xs, list_scheme, depth=12, induction_depth=1
+    )
 
     # Length distributes over append.
     len_append_goal = Clause((), eq(length(app(xs, ys)), add(length(xs), length(ys))))
-    assert prove_with_induction(len_append_goal, xs, list_scheme, depth=14, induction_depth=1)
+    assert prove_with_induction(
+        len_append_goal, xs, list_scheme, depth=14, induction_depth=1
+    )
 
     # Configuration controls AC normalization behavior.
     no_ac_config = EngineConfig(precedence=config.precedence, assoc=set(), comm=set())
@@ -1277,7 +1410,9 @@ if __name__ == "__main__":
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
 
     # Proof traces record induction structure in a readable form.
-    ok_trace, ptrace = prove_with_trace(assoc_goal, depth=12, var=xs, scheme=list_scheme, induction_depth=1)
+    ok_trace, ptrace = prove_with_trace(
+        assoc_goal, depth=12, var=xs, scheme=list_scheme, induction_depth=1
+    )
     assert ok_trace
     rendered = render_proof_trace(ptrace)
     assert "induction" in rendered

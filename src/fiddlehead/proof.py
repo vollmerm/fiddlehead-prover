@@ -17,6 +17,7 @@ from .kernel import (
     Rule,
     _term_key,
     get_induction_scheme,
+    is_ground,
     make_engine,
     normalize,
     var_matches_scheme,
@@ -33,6 +34,37 @@ class Clause:
     assumptions: Tuple[Tuple[Term, Term], ...]
     goal: Term
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
+
+
+def _build_context(
+    assumptions: Tuple[Tuple[Term, Term], ...],
+    disequalities: Tuple[Tuple[Term, Term], ...],
+) -> Context:
+    """Classify clause assumptions into substitutions, ground equalities, and rewrite rules.
+
+    - **substitutions**: where at least one side is a bare variable (e.g., x = nil)
+    - **ground_equalities**: between ground (variable-free) terms
+    - **rewrite_equalities**: complex equalities like induction hypotheses
+
+    Substitutions and ground equalities go into EqClasses for congruence closure.
+    Rewrite equalities become contextual rewrite rules.
+    """
+    substitutions: list[Tuple[Term, Term]] = []
+    ground_equalities: list[Tuple[Term, Term]] = []
+    rewrite_equalities: list[Tuple[Term, Term]] = []
+    for lhs, rhs in assumptions:
+        if isinstance(lhs, Var) or isinstance(rhs, Var):
+            substitutions.append((lhs, rhs))
+        elif is_ground(lhs) and is_ground(rhs):
+            ground_equalities.append((lhs, rhs))
+        else:
+            rewrite_equalities.append((lhs, rhs))
+    return Context(
+        substitutions=tuple(substitutions),
+        ground_equalities=tuple(ground_equalities),
+        rewrite_equalities=tuple(rewrite_equalities),
+        disequalities=disequalities,
+    )
 
 
 def vars_in_term(term: Term) -> set[str]:
@@ -170,7 +202,7 @@ def simplify_clause_with_stages(
 
     local_engine = make_engine(
         rules=engine.rules,
-        ctx=Context(assumptions, disequalities),
+        ctx=_build_context(assumptions, disequalities),
         trace=engine.trace,
         fuel=engine.fuel,
         config=engine.config,
@@ -509,7 +541,7 @@ class ProofCertificate:
 def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
     return make_engine(
         rules=engine.rules,
-        ctx=Context(clause.assumptions, clause.disequalities),
+        ctx=_build_context(clause.assumptions, clause.disequalities),
         trace=engine.trace,
         fuel=engine.fuel,
         config=engine.config,

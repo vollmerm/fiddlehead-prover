@@ -1,16 +1,24 @@
 # Fiddlehead
 
-Fiddlehead is a tiny proof assistant with a pleasantly mossy vibe: a pocket-sized theorem prover for rewriting terms, chasing equalities, and occasionally coaxing induction into doing something clever.
+Fiddlehead is a small theorem prover written in Python.
 
-It exposes a public Python API through `fiddlehead`, which re-exports the stable interface from `fiddlehead.prover`. Under the hood it supports:
+I started it as a learning project because I wanted to understand, from the inside, how systems like ACL2 and Z3 work. Over time it grew into something more capable than a toy, but I have tried to keep the core ideas visible so the codebase stays useful for learning.
 
-- first-order terms 
-- rewrite rules and normalization
-- clause proving with simplification, branching, and induction
-- strict sort inference and checking
-- theorem environments, scoped rewrites, and interactive proof sessions
+The public API is exposed through `fiddlehead`, which re-exports the main interface from `fiddlehead.prover`.
 
-## Public-facing API
+## What it does
+
+Fiddlehead works with first-order terms and equality goals. It can:
+
+- normalize terms with rewrite rules
+- reason about equalities in context
+- prove simple clauses by simplification, branching, and induction
+- infer and check sorts
+- load small theories with scoped rewrites and induction schemes
+
+It is a better fit for small, explicit proof experiments than for large formal developments. The aim is to keep the prover compact enough that you can read through the implementation and understand how the pieces fit together.
+
+## Public API
 
 The recommended entrypoint is:
 
@@ -19,6 +27,8 @@ from fiddlehead import *
 ```
 
 ## Examples
+
+This example installs a small natural-number theory, normalizes a term, and proves a basic identity by induction.
 
 ```python
 from fiddlehead import *
@@ -43,6 +53,8 @@ scheme = get_induction_scheme(engine, "nat")
 assert scheme is not None
 assert prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
 ```
+
+This one proves associativity of list append and prints the resulting proof trace.
 
 ```python
 from fiddlehead import *
@@ -82,7 +94,7 @@ Example proof tree output:
       - simplify -> true
 ```
 
-Check out the `examples` folder for more:
+The `examples` directory has a few larger scripts. For example:
 
 ```text
 $ python ./examples/prove_length_append.py
@@ -97,12 +109,12 @@ $ python ./examples/prove_length_append.py
 
 ## Installation
 
-Clone the repo and install it locally for development:
+Clone the repository and install it locally for development:
 
 ```bash
 git clone https://github.com/vollmerm/fiddlehead-prover.git
 cd fiddlehead-prover
-python -m venv .venv # or python3
+python -m venv .venv  # or python3
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .

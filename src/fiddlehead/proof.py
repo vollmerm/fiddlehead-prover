@@ -25,6 +25,7 @@ from .kernel import (
 from .syntax import App, Fun, Term, V, Var, apply_subst, false, true
 from .trace import ProofNode, ProofTrace, _new_node
 from .validation import _validate_clause_sorts, _validate_rule_sorts
+from .generalize import generalize_clause, ungeneralize_clause, GeneralizationMap
 
 
 @dataclass(frozen=True)
@@ -425,14 +426,75 @@ def prove_with_induction(
     depth: int = 5,
     induction_depth: int = 1,
     proof_node: Optional[ProofNode] = None,
+    generalize: bool = True,
 ) -> bool:
-    """Attempt proof with optional induction when plain recursion stalls."""
+    """Attempt proof with optional induction when plain recursion stalls.
+
+    Args:
+        clause: The clause to prove.
+        engine: The proving engine.
+        var: The induction variable.
+        scheme: The induction scheme.
+        depth: Maximum proof search depth.
+        induction_depth: Number of nested inductions allowed.
+        proof_node: Optional proof tree node for tracing.
+        generalize: If True (default), attempt generalization before induction
+                   to make the goal more amenable to proof. If False, skip
+                   generalization.
+
+    Returns:
+        True if the proof succeeded, False otherwise.
+    """
 
     if not var_matches_scheme(var, scheme):
         if proof_node is not None:
             proof_node.solved = False
             proof_node.note = f"sort mismatch for scheme {scheme.name}"
         return False
+
+    generalized_result: Optional[bool] = None
+    gen_map: Optional[GeneralizationMap] = None
+
+    if generalize and induction_depth > 0:
+        gen_result = generalize_clause(clause, engine, induction_var=var)
+        if gen_result is not None:
+            generalized_clause, gen_map = gen_result
+            generalized_result = _prove_induction_on_clause(
+                generalized_clause,
+                engine,
+                var,
+                scheme,
+                depth,
+                induction_depth,
+                proof_node,
+                f"var={var.name}, scheme={scheme.name}, generalized",
+            )
+            if generalized_result:
+                return True
+
+    return _prove_induction_on_clause(
+        clause,
+        engine,
+        var,
+        scheme,
+        depth,
+        induction_depth,
+        proof_node,
+        f"var={var.name}, scheme={scheme.name}",
+    )
+
+
+def _prove_induction_on_clause(
+    clause: Clause,
+    engine: Engine,
+    var: Var,
+    scheme: InductionScheme,
+    depth: int,
+    induction_depth: int,
+    proof_node: Optional[ProofNode],
+    note: str,
+) -> bool:
+    """Helper that runs the actual induction proof on a given clause."""
 
     def induction_handler(
         simplified_clause: Clause,
@@ -447,7 +509,7 @@ def prove_with_induction(
         induction_node = _new_node(
             "induction",
             simplified_clause,
-            note=f"var={var.name}, scheme={scheme.name}",
+            note=note,
         )
         if current_node is not None:
             current_node.children.append(induction_node)
@@ -465,6 +527,7 @@ def prove_with_induction(
                     current_depth,
                     next_induction,
                     child,
+                    generalize=False,
                 )
             )
         induction_node.solved = all(branch_results)
@@ -481,6 +544,7 @@ def prove_with_registered_induction(
     depth: int = 5,
     induction_depth: int = 1,
     proof_node: Optional[ProofNode] = None,
+    generalize: bool = True,
 ) -> bool:
     """Run induction proof using a scheme looked up by name."""
 
@@ -491,7 +555,7 @@ def prove_with_registered_induction(
             proof_node.note = f"unknown scheme {scheme_name}"
         return False
     return prove_with_induction(
-        clause, engine, var, scheme, depth, induction_depth, proof_node
+        clause, engine, var, scheme, depth, induction_depth, proof_node, generalize
     )
 
 
@@ -503,6 +567,7 @@ def prove_with_trace(
     scheme: Optional[InductionScheme] = None,
     scheme_name: Optional[str] = None,
     induction_depth: int = 1,
+    generalize: bool = True,
 ) -> tuple[bool, ProofTrace]:
     """Run proof search and return both success flag and trace tree."""
 
@@ -522,6 +587,7 @@ def prove_with_trace(
                 depth=depth,
                 induction_depth=induction_depth,
                 proof_node=root,
+                generalize=generalize,
             ),
             trace,
         )
@@ -535,6 +601,7 @@ def prove_with_trace(
                 depth=depth,
                 induction_depth=induction_depth,
                 proof_node=root,
+                generalize=generalize,
             ),
             trace,
         )

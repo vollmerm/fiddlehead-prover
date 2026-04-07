@@ -1023,3 +1023,36 @@ def test_context_equality_classification() -> None:
     for rule in rules:
         assert not isinstance(rule.lhs, Var)
     assert all(rule.skip_decrease_check for rule in rules)
+
+
+def test_contradiction_pruning(env) -> None:  # type: ignore
+    x = env["x"]
+    y = env["y"]
+    z = env["z"]
+    S = env["S"]
+    zero = env["zero"]
+    eq = env["eq"]
+    neq = env["neq"]
+    engine = env["engine"]
+
+    basic_contradiction = Clause((), eq(x, y), ((x, y),))
+    assert not prove(basic_contradiction, engine, depth=5)
+
+    ground_contradiction = Clause((), eq(S(zero), zero), ((S(zero), zero),))
+    assert not prove(ground_contradiction, engine, depth=5)
+
+    multiple_diseq_clause = Clause((), eq(x, y), ((x, y), (y, z)))
+    assert not prove(multiple_diseq_clause, engine, depth=5)
+
+    if_cond = App("if", eq(x, y), eq(x, y), false)
+    split_branches = split_clause(Clause((), if_cond, ()))
+    assert len(split_branches) == 2
+    assert split_branches[0].assumptions == ((x, y),)
+    assert split_branches[1].disequalities == ((x, y),)
+
+    no_contradiction = Clause((), eq(x, y), ((x, z),))
+    result = prove(no_contradiction, engine, depth=5)
+    assert result is False
+
+    complex_clause = Clause(((y, z),), eq(x, y), ((x, z),))
+    assert not prove(complex_clause, engine, depth=5)

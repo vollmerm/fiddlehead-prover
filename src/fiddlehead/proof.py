@@ -288,6 +288,19 @@ def clause_solved(clause: Clause) -> bool:
     return clause.goal == true
 
 
+def clause_is_unsatisfiable(clause: Clause, engine: Engine) -> bool:
+    """Return True if clause contains a contradiction between assumptions and disequalities.
+
+    A contradiction occurs when a disequality (lhs ≠ rhs) is provably true
+    under the contextual equalities from assumptions.
+    """
+    local = _local_engine_for_clause(clause, engine)
+    for dl, dr in clause.disequalities:
+        if local.holds(dl, dr):
+            return True
+    return False
+
+
 def split_clause(clause: Clause) -> list[Clause]:
     """Split ``if`` goals into branch obligations."""
 
@@ -356,6 +369,11 @@ def _prove_kernel_impl(
     simplified = simplify_clause(clause, engine)
     if proof_node is not None:
         proof_node.children.append(_new_node("simplify", simplified))
+    if clause_is_unsatisfiable(simplified, engine):
+        if proof_node is not None:
+            proof_node.solved = False
+        return False
+
     if clause_solved(simplified):
         if proof_node is not None:
             proof_node.solved = True

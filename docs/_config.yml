@@ -1,0 +1,14 @@
+title: Fiddlehead Prover
+description: A minimal theorem prover in Python
+
+plugins:
+  - jekyll-remote-theme
+
+remote_theme: just-the-docs/just-the-docs
+
+url: https://vollmerm.github.io
+baseurl: "/fiddlehead-prover"
+
+aux_links:
+  "GitHub Repo":
+    - "//github.com/vollmerm/fiddlehead-prover"

@@ -773,6 +773,128 @@ def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
     return out
 
 
+def _rewrite_term_recursive(term: Term, rule: Rule, engine: Engine) -> Optional[Term]:
+    """Try to rewrite term recursively, drilling into subterms.
+
+    Returns (rewritten, changed) where changed indicates if a rewrite occurred.
+    """
+    from .syntax import Fun
+
+    rewritten = engine.rewrite_once(term, rule)
+    if rewritten is not None:
+        return rewritten
+
+    match term:
+        case Fun(symbol, args) if args:
+            new_args = []
+            for arg in args:
+                result = _rewrite_term_recursive(arg, rule, engine)
+                if result is not None:
+                    new_args.append(result)
+                    return Fun(
+                        symbol,
+                        tuple(new_args[: len(args)] + list(args[len(new_args) :])),
+                    )
+                new_args.append(arg)
+            return None
+        case _:
+            return None
+
+
+def _rewrite_term_all(term: Term, rule: Rule, engine: Engine) -> Term:
+    """Rewrite term recursively, applying rule everywhere in subtrees."""
+    from .syntax import Fun
+
+    rewritten = engine.rewrite_once(term, rule)
+    if rewritten is not None:
+        term = rewritten
+
+    match term:
+        case Fun(symbol, args) if args:
+            new_args = [_rewrite_term_all(arg, rule, engine) for arg in args]
+            return Fun(symbol, tuple(new_args))
+        case _:
+            return term
+
+
+def _rewrite_first_subterm(term: Term, rule: Rule, engine: Engine) -> Optional[Term]:
+    """Apply rule at most once, recursively searching into arguments.
+
+    Returns the rewritten term if successful, None if no rewrite applied.
+    """
+    from .syntax import Fun
+
+    rewritten = engine.rewrite_once(term, rule)
+    if rewritten is not None:
+        return rewritten
+
+    match term:
+        case Fun(symbol, args) if args:
+            new_args = []
+            for arg in args:
+                result = _rewrite_first_subterm(arg, rule, engine)
+                if result is not None:
+                    new_args.append(result)
+                    new_args.extend(args[len(new_args) :])
+                    return Fun(symbol, tuple(new_args))
+                new_args.append(arg)
+            return None
+        case _:
+            return None
+
+
+def _rewrite_all_subterms(term: Term, rule: Rule, engine: Engine) -> Term:
+    """Apply rule everywhere in term, recursively drilling into all subterms."""
+    from .syntax import Fun
+
+    while True:
+        rewritten = engine.rewrite_once(term, rule)
+        if rewritten is not None:
+            term = rewritten
+            continue
+
+        match term:
+            case Fun(symbol, args) if args:
+                new_args = []
+                changed = False
+                for arg in args:
+                    result = _rewrite_all_subterms(arg, rule, engine)
+                    if result != arg:
+                        changed = True
+                    new_args.append(result)
+                if changed:
+                    term = Fun(symbol, tuple(new_args))
+                    continue
+                break
+            case _:
+                break
+        break
+
+    return term
+
+
+def _check_rewrite_first_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
+    """Rewrite clause goal, drilling into subterms, applying at most once."""
+    _validate_rule_sorts(rule, engine, "rewrite step")
+    local = _local_engine_for_clause(clause, engine)
+    rewritten = _rewrite_first_subterm(clause.goal, rule, local)
+    if rewritten is None:
+        raise ValueError("Rewrite rule does not apply to current goal or its subterms.")
+    out = Clause(clause.assumptions, rewritten, clause.disequalities)
+    _validate_clause_sorts(out, engine, "rewrite result")
+    return out
+
+
+def _check_rewrite_many_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
+    """Rewrite clause goal, applying rule everywhere in subterms."""
+    _validate_rule_sorts(rule, engine, "rewrite step")
+    local = _local_engine_for_clause(clause, engine)
+    rewritten = _rewrite_all_subterms(clause.goal, rule, local)
+    out = Clause(clause.assumptions, rewritten, clause.disequalities)
+    _validate_clause_sorts(out, engine, "rewrite result")
+    return out
+
+
 def _prove_certificate_kernel(
     clause: Clause,
     engine: Engine,

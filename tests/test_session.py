@@ -314,3 +314,129 @@ class TestSessionEdgeCases:
 
         with pytest.raises(ValueError, match="No goals left"):
             session.exact()
+
+
+class TestNamedRewrites:
+    """Tests for session.rewrite_by_name() and session.list_rules()."""
+
+    def test_list_rules_returns_theory_rules(self, session_env: dict) -> None:
+        """Should return named rules from installed theories."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        rules = session.list_rules()
+        assert len(rules) > 0
+        assert any("theory.core.nat" in name for name in rules.keys())
+
+    def test_list_rules_with_pattern_filter(self, session_env: dict) -> None:
+        """Should filter rules by glob pattern."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        nat_rules = session.list_rules(pattern="*core.nat*")
+        assert all("core.nat" in name for name in nat_rules.keys())
+
+        list_rules = session.list_rules(pattern="*core.list*")
+        assert all("core.list" in name for name in list_rules.keys())
+
+    def test_list_rules_with_no_matches(self, session_env: dict) -> None:
+        """Should return empty dict when pattern matches nothing."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        rules = session.list_rules(pattern="*nonexistent*")
+        assert len(rules) == 0
+
+    def test_rewrite_by_name_unknown_rule_raises(self, session_env: dict) -> None:
+        """Should raise error for unknown rule names."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        with pytest.raises(ValueError, match="Unknown named rule"):
+            session.rewrite_by_name("nonexistent-rule")
+
+    def test_rewrite_rejects_arbitrary_rules(self, session_env: dict) -> None:
+        """Should reject non-theory rules passed to rewrite()."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        arbitrary_rule = Rule(Const("0"), Const("1"))
+        with pytest.raises(ValueError, match="Cannot apply arbitrary rewrite"):
+            session.rewrite(arbitrary_rule)
+
+    def test_get_named_rule_info(self, session_env: dict) -> None:
+        """Should return rule with source info from theory."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        rules = session.list_rules()
+        assert len(rules) > 0
+
+        first_rule_name = next(iter(rules.keys()))
+        rule, source = session.theory.get_named_rule_info(first_rule_name)
+        assert rule is not None
+        assert source.name == "THEORY"
+
+    def test_named_rules_include_theory_rules(self, session_env: dict) -> None:
+        """Named rules should include rules from installed theories."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        named_info = session.theory.list_named_rules()
+        assert len(named_info) > 0
+
+        for name, (rule, source) in named_info.items():
+            assert rule is not None
+            assert source.name in ("THEORY", "DEFINITION", "LEMMA")
+
+    def test_rewrite_first_unknown_rule_raises(self, session_env: dict) -> None:
+        """Should raise error for unknown rule names in rewrite_first."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        with pytest.raises(ValueError, match="Unknown named rule"):
+            session.rewrite_first("nonexistent-rule")
+
+    def test_rewrite_many_unknown_rule_raises(self, session_env: dict) -> None:
+        """Should raise error for unknown rule names in rewrite_many."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        with pytest.raises(ValueError, match="Unknown named rule"):
+            session.rewrite_many("nonexistent-rule")

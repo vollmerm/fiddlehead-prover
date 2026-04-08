@@ -87,6 +87,7 @@ from .trace import (
 )
 from .theory import (
     Lemma,
+    RuleSource,
     TheoremEnvironment,
     Theory,
     get_theorem_environment,
@@ -159,6 +160,7 @@ __all__ = [
     "prove_checked",
     "check_certificate",
     "Lemma",
+    "RuleSource",
     "Theory",
     "theory_from_module",
     "load_theory_module",

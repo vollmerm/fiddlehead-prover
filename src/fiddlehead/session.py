@@ -2,13 +2,15 @@ from __future__ import annotations
 
 """Interactive proof-session API built on checked proof primitives."""
 
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .kernel import Engine, InductionScheme, Rule, SortSignature
 from .proof import (
     Clause,
     _check_exact_step,
     _check_induction_step,
+    _check_rewrite_first_step,
+    _check_rewrite_many_step,
     _check_rewrite_step,
     _check_split_step,
     clause_solved,
@@ -17,7 +19,12 @@ from .proof import (
 )
 from .select_induction import choose_induction_var
 from .syntax import Term, Var, true
-from .theory import Lemma, _select_induction_scheme, get_theorem_environment
+from .theory import (
+    Lemma,
+    RuleSource,
+    _select_induction_scheme,
+    get_theorem_environment,
+)
 from .trace import ProofNode, ProofTrace, _new_node
 
 
@@ -227,11 +234,49 @@ class ProofSession:
         )
         self._replace_current(branches)
 
-    def rewrite(self, rule: Rule) -> None:
-        """Rewrite the current goal once using ``rule``."""
+    def rewrite_by_name(self, name: str) -> None:
+        """Rewrite the current goal once using a named rule from the theory.
 
+        Args:
+            name: The name of the rule to apply.
+
+        Raises:
+            ValueError: If no goals remain or the named rule is not found.
+        """
         if not self.goals:
             raise ValueError("No goals left.")
+
+        entry = self.theory.get_named_rule_info(name)
+        if entry is None:
+            raise ValueError(f"Unknown named rule: {name}")
+
+        rule, source = entry
+        original = self.goals[0]
+        user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
+        rewritten = _check_rewrite_step(original, user_rule, self.engine)
+        self._record(
+            "session-rewrite-by-name",
+            original,
+            note=f"{name} ({source.name.lower()})",
+            children=[_new_node("goal", rewritten)],
+        )
+        self.goals[0] = rewritten
+
+    def rewrite(self, rule: Rule) -> None:
+        """Rewrite the current goal once using ``rule``.
+
+        Note:
+            The rule must originate from the theory (definitions, lemmas, or
+            installed theories). Arbitrary user-provided rules are not allowed.
+            Use rewrite_by_name() to apply named rules from the theory.
+        """
+        if not self.goals:
+            raise ValueError("No goals left.")
+        if not self.theory.is_theory_rule(rule):
+            raise ValueError(
+                "Cannot apply arbitrary rewrite. Use rewrite_by_name() "
+                "with a rule from the theory (definitions, lemmas, or installed theories)."
+            )
         original = self.goals[0]
         rewritten = _check_rewrite_step(original, rule, self.engine)
         self._record(
@@ -241,6 +286,81 @@ class ProofSession:
             children=[_new_node("goal", rewritten)],
         )
         self.goals[0] = rewritten
+
+    def rewrite_first(self, name: str) -> None:
+        """Rewrite the current goal, drilling into subterms, applying at most once.
+
+        Searches recursively into the arguments of function applications until
+        the rule matches. Only applies the rewrite once, even if it could
+        apply multiple times in different subtrees.
+
+        Args:
+            name: The name of the rule to apply.
+
+        Raises:
+            ValueError: If no goals remain or the rule doesn't match.
+        """
+        if not self.goals:
+            raise ValueError("No goals left.")
+
+        entry = self.theory.get_named_rule_info(name)
+        if entry is None:
+            raise ValueError(f"Unknown named rule: {name}")
+
+        rule, source = entry
+        original = self.goals[0]
+        user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
+        rewritten = _check_rewrite_first_step(original, user_rule, self.engine)
+        self._record(
+            "session-rewrite-first",
+            original,
+            note=f"{name} ({source.name.lower()})",
+            children=[_new_node("goal", rewritten)],
+        )
+        self.goals[0] = rewritten
+
+    def rewrite_many(self, name: str) -> None:
+        """Rewrite the current goal, applying the rule everywhere in subtrees.
+
+        Recursively drills into all arguments of function applications and
+        applies the rule at every matching position until no more matches exist.
+
+        Args:
+            name: The name of the rule to apply.
+
+        Raises:
+            ValueError: If no goals remain.
+        """
+        if not self.goals:
+            raise ValueError("No goals left.")
+
+        entry = self.theory.get_named_rule_info(name)
+        if entry is None:
+            raise ValueError(f"Unknown named rule: {name}")
+
+        rule, source = entry
+        original = self.goals[0]
+        user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
+        rewritten = _check_rewrite_many_step(original, user_rule, self.engine)
+        self._record(
+            "session-rewrite-many",
+            original,
+            note=f"{name} ({source.name.lower()})",
+            children=[_new_node("goal", rewritten)],
+        )
+        self.goals[0] = rewritten
+
+    def list_rules(self, pattern: Optional[str] = None) -> Dict[str, Rule]:
+        """List named rules from the theory, optionally filtered by pattern.
+
+        Args:
+            pattern: Optional glob pattern to filter rule names (e.g., 'add*', '*comm*').
+
+        Returns:
+            Dictionary mapping rule names to their Rule objects.
+        """
+        named = self.theory.list_named_rules(pattern)
+        return {name: rule for name, (rule, _) in named.items()}
 
     def exact(self) -> None:
         """Discharge the current goal when it is directly solved."""

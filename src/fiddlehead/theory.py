@@ -140,6 +140,91 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
     )
 
 
+def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
+    """Return an integer ring-style theory in a dedicated Int namespace."""
+
+    x = V("int_x", "Int")
+    y = V("int_y", "Int")
+    a = V("int_a", "Nat")
+    b = V("int_b", "Nat")
+    c = V("int_c", "Nat")
+    d = V("int_d", "Nat")
+    zero_nat = Const("0")
+    one_nat = App("S", zero_nat)
+    z0 = Const("z0")
+    z1 = Const("z1")
+
+    def succ(term: Term) -> Term:
+        return App("S", term)
+
+    def add_nat(left: Term, right: Term) -> Term:
+        return App("add", left, right)
+
+    def mul_nat(left: Term, right: Term) -> Term:
+        return App("mul", left, right)
+
+    def zint(pos_nat: Term, neg_nat: Term) -> Term:
+        return App("zint", pos_nat, neg_nat)
+
+    def zadd(left: Term, right: Term) -> Term:
+        return App("zadd", left, right)
+
+    def zmul(left: Term, right: Term) -> Term:
+        return App("zmul", left, right)
+
+    def zneg(term: Term) -> Term:
+        return App("zneg", term)
+
+    return Theory(
+        name=name,
+        version=version,
+        depends_on=("core.nat",),
+        sort_signatures={
+            "z0": SortSignature((), TypeConst("Int")),
+            "z1": SortSignature((), TypeConst("Int")),
+            "zint": SortSignature(
+                (TypeConst("Nat"), TypeConst("Nat")), TypeConst("Int")
+            ),
+            "zadd": SortSignature(
+                (TypeConst("Int"), TypeConst("Int")), TypeConst("Int")
+            ),
+            "zmul": SortSignature(
+                (TypeConst("Int"), TypeConst("Int")), TypeConst("Int")
+            ),
+            "zneg": SortSignature((TypeConst("Int"),), TypeConst("Int")),
+        },
+        rules=(
+            Rule(z0, zint(zero_nat, zero_nat), skip_decrease_check=True),
+            Rule(z1, zint(one_nat, zero_nat), skip_decrease_check=True),
+            Rule(zadd(z0, y), y, skip_decrease_check=True),
+            Rule(zadd(y, z0), y, skip_decrease_check=True),
+            Rule(
+                zadd(zint(a, b), zint(c, d)),
+                zint(add_nat(a, c), add_nat(b, d)),
+                skip_decrease_check=True,
+            ),
+            Rule(zneg(z0), z0),
+            Rule(zneg(zint(a, b)), zint(b, a)),
+            Rule(zmul(z0, y), z0, skip_decrease_check=True),
+            Rule(zmul(y, z0), z0, skip_decrease_check=True),
+            Rule(zmul(z1, y), y, skip_decrease_check=True),
+            Rule(zmul(y, z1), y, skip_decrease_check=True),
+            Rule(
+                zmul(zint(a, b), zint(c, d)),
+                zint(
+                    add_nat(mul_nat(a, c), mul_nat(b, d)),
+                    add_nat(mul_nat(a, d), mul_nat(b, c)),
+                ),
+                skip_decrease_check=True,
+            ),
+            Rule(zint(succ(a), succ(b)), zint(a, b)),
+        ),
+        precedence={"zneg": 5, "zmul": 4, "zadd": 3, "zint": 2},
+        assoc=("zadd", "zmul"),
+        comm=("zadd", "zmul"),
+    )
+
+
 def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     """Return a standard list-processing theory."""
 

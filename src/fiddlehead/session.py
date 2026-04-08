@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
-from .kernel import Engine, InductionScheme, Rule, SortSignature
+from .kernel import Engine, InductionScheme, Rule, SortSignature, is_ground
 from .proof import (
     Clause,
     _check_exact_step,
@@ -38,6 +38,8 @@ class ProofSession:
         self.trace = ProofTrace()
         self._trace_root = _new_node("session", clause, note="interactive")
         self.trace.roots.append(self._trace_root)
+        self._ih_rules: Dict[str, Rule] = {}
+        self._sync_ih_rules()
 
     def _record(
         self,
@@ -62,6 +64,31 @@ class ProofSession:
 
     def _replace_current(self, new_goals: list[Clause]) -> None:
         self.goals = new_goals + self.goals[1:]
+        self._sync_ih_rules()
+
+    def _sync_ih_rules(self) -> None:
+        """Extract and store IH rules from the current goal's assumptions."""
+        if self.goals:
+            self._ih_rules = self._extract_ih_rules(self.goals[0])
+        else:
+            self._ih_rules = {}
+
+    def _extract_ih_rules(self, clause: Clause) -> Dict[str, Rule]:
+        """Extract induction hypothesis rules from clause assumptions.
+
+        IH criteria: an assumption is an IH if:
+        - Both sides are non-ground (not a ground equality)
+        - It's an equality that came from the induction step
+        """
+        rules: Dict[str, Rule] = {}
+        counter = 0
+        for lhs, rhs in clause.assumptions:
+            if is_ground(lhs) and is_ground(rhs):
+                continue
+            rule = Rule(lhs, rhs, skip_decrease_check=True)
+            rules[f"IH.{counter}"] = rule
+            counter += 1
+        return rules
 
     def assumptions(self) -> Tuple[Tuple[Term, Term], ...]:
         """Return assumptions of the current goal."""
@@ -235,16 +262,32 @@ class ProofSession:
         self._replace_current(branches)
 
     def rewrite_by_name(self, name: str) -> None:
-        """Rewrite the current goal once using a named rule from the theory.
+        """Rewrite the current goal once using a named rule.
+
+        Checks induction hypotheses first (e.g., 'IH.0'), then falls back
+        to theory rules (definitions, lemmas, installed theories).
 
         Args:
-            name: The name of the rule to apply.
+            name: The name of the rule to apply (IH name or theory rule name).
 
         Raises:
             ValueError: If no goals remain or the named rule is not found.
         """
         if not self.goals:
             raise ValueError("No goals left.")
+
+        if name in self._ih_rules:
+            rule = self._ih_rules[name]
+            original = self.goals[0]
+            rewritten = _check_rewrite_step(original, rule, self.engine)
+            self._record(
+                "session-rewrite-by-name",
+                original,
+                note=f"{name} (ih)",
+                children=[_new_node("goal", rewritten)],
+            )
+            self.goals[0] = rewritten
+            return
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
@@ -290,18 +333,32 @@ class ProofSession:
     def rewrite_first(self, name: str) -> None:
         """Rewrite the current goal, drilling into subterms, applying at most once.
 
-        Searches recursively into the arguments of function applications until
-        the rule matches. Only applies the rewrite once, even if it could
-        apply multiple times in different subtrees.
+        Checks induction hypotheses first (e.g., 'IH.0'), then falls back
+        to theory rules. Searches recursively into the arguments of function
+        applications until the rule matches. Only applies the rewrite once,
+        even if it could apply multiple times in different subtrees.
 
         Args:
-            name: The name of the rule to apply.
+            name: The name of the rule to apply (IH name or theory rule name).
 
         Raises:
             ValueError: If no goals remain or the rule doesn't match.
         """
         if not self.goals:
             raise ValueError("No goals left.")
+
+        if name in self._ih_rules:
+            rule = self._ih_rules[name]
+            original = self.goals[0]
+            rewritten = _check_rewrite_first_step(original, rule, self.engine)
+            self._record(
+                "session-rewrite-first",
+                original,
+                note=f"{name} (ih)",
+                children=[_new_node("goal", rewritten)],
+            )
+            self.goals[0] = rewritten
+            return
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
@@ -322,17 +379,32 @@ class ProofSession:
     def rewrite_many(self, name: str) -> None:
         """Rewrite the current goal, applying the rule everywhere in subtrees.
 
-        Recursively drills into all arguments of function applications and
-        applies the rule at every matching position until no more matches exist.
+        Checks induction hypotheses first (e.g., 'IH.0'), then falls back
+        to theory rules. Recursively drills into all arguments of function
+        applications and applies the rule at every matching position until
+        no more matches exist.
 
         Args:
-            name: The name of the rule to apply.
+            name: The name of the rule to apply (IH name or theory rule name).
 
         Raises:
             ValueError: If no goals remain.
         """
         if not self.goals:
             raise ValueError("No goals left.")
+
+        if name in self._ih_rules:
+            rule = self._ih_rules[name]
+            original = self.goals[0]
+            rewritten = _check_rewrite_many_step(original, rule, self.engine)
+            self._record(
+                "session-rewrite-many",
+                original,
+                note=f"{name} (ih)",
+                children=[_new_node("goal", rewritten)],
+            )
+            self.goals[0] = rewritten
+            return
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
@@ -362,6 +434,16 @@ class ProofSession:
         named = self.theory.list_named_rules(pattern)
         return {name: rule for name, (rule, _) in named.items()}
 
+    def list_ihs(self) -> Dict[str, Rule]:
+        """List induction hypotheses available for the current goal.
+
+        Returns empty dict for base cases or goals without IHs.
+
+        Returns:
+            Dictionary mapping IH names (e.g., 'IH.0', 'IH.1') to their Rule objects.
+        """
+        return dict(self._ih_rules)
+
     def exact(self) -> None:
         """Discharge the current goal when it is directly solved."""
 
@@ -373,6 +455,7 @@ class ProofSession:
             "session-exact", original, solved=True, children=[_new_node("goal", solved)]
         )
         self.goals = self.goals[1:]
+        self._sync_ih_rules()
 
     def register_lemma(
         self, lemma: Lemma, depth: int = 12, induction_depth: int = 2

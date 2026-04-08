@@ -440,3 +440,86 @@ class TestNamedRewrites:
 
         with pytest.raises(ValueError, match="Unknown named rule"):
             session.rewrite_many("nonexistent-rule")
+
+
+class TestInductionHypotheses:
+    """Tests for session.list_ihs() and IH-based rewrites."""
+
+    def test_list_ihs_empty_before_induction(self, session_env: dict) -> None:
+        """Should return empty dict before induction."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        assert session.list_ihs() == {}
+
+    def test_list_ihs_empty_in_base_case(self, session_env: dict) -> None:
+        """Should return empty dict in base case after induction on lists."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        append = session_env["append"]
+        nil = session_env["nil"]
+        xs = session_env["xs"]
+
+        goal = Clause((), eq(append(xs, nil), xs))
+        session = ProofSession(goal, engine)
+        session.induct(xs)
+
+        assert session.current_goal() is not None
+        assert session.list_ihs() == {}
+
+    def test_list_ihs_available_in_step_case(self, session_env: dict) -> None:
+        """Should return IHs in step case after induction on lists."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        append = session_env["append"]
+        nil = session_env["nil"]
+        xs = session_env["xs"]
+
+        goal = Clause((), eq(append(xs, nil), xs))
+        session = ProofSession(goal, engine)
+        session.induct(xs)
+
+        session.exact()
+
+        assert session.current_goal() is not None
+        ihs = session.list_ihs()
+        assert len(ihs) > 0
+        assert "IH.0" in ihs
+
+    def test_rewrite_by_ih_name(self, session_env: dict) -> None:
+        """Should apply IH by name using rewrite_first (IHs need subterm drilling)."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        append = session_env["append"]
+        nil = session_env["nil"]
+        xs = session_env["xs"]
+
+        goal = Clause((), eq(append(xs, nil), xs))
+        session = ProofSession(goal, engine)
+        session.induct(xs)
+
+        session.exact()
+
+        ihs = session.list_ihs()
+        assert "IH.0" in ihs
+
+        session.rewrite_first("IH.0")
+        assert session.current_goal() is not None
+
+    def test_unknown_ih_raises(self, session_env: dict) -> None:
+        """Should raise error for unknown IH name."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        xs = session_env["xs"]
+
+        goal = Clause((), eq(xs, xs))
+        session = ProofSession(goal, engine)
+        session.induct(xs)
+        session.exact()
+
+        with pytest.raises(ValueError, match="Unknown named rule"):
+            session.rewrite_by_name("IH.99")

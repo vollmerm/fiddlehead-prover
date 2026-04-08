@@ -962,6 +962,58 @@ def test_map_theory() -> None:
     assert branches[1].disequalities == ((k1, k2),)
 
 
+def test_int_theory() -> None:
+    reset_var_interner()
+    x = V("zi_x", "Int")
+    y = V("zi_y", "Int")
+    a = V("zi_a", "Int")
+    b = V("zi_b", "Int")
+    c = V("zi_c", "Int")
+    zero_nat = Const("0")
+    S = lambda t: App("S", t)
+
+    z0 = Const("z0")
+    z1 = Const("z1")
+    zint = lambda p, n: App("zint", p, n)
+    zadd = lambda l, r: App("zadd", l, r)
+    zmul = lambda l, r: App("zmul", l, r)
+    zneg = lambda t: App("zneg", t)
+    eq = lambda l, r: App("eq", l, r)
+
+    int_core = int_theory()
+    assert int_core.depends_on == ("core.nat",)
+    assert int_core.sort_signatures["z0"].result_sort == TypeConst("Int")
+    assert int_core.sort_signatures["zadd"].arg_sorts == (
+        TypeConst("Int"),
+        TypeConst("Int"),
+    )
+    assert int_core.precedence["zadd"] == 3
+    assert int_core.precedence["zmul"] == 4
+    assert "zadd" in int_core.assoc and "zadd" in int_core.comm
+    assert "zmul" in int_core.assoc and "zmul" in int_core.comm
+
+    missing_dep_engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
+    with pytest.raises(ValueError, match="Missing theory dependency: core.nat"):
+        install_theory(missing_dep_engine, int_theory(), activate_scopes=True)
+
+    engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, int_theory(), activate_scopes=True)
+
+    assert str(normalize(zadd(z1, z0), engine)) == "zint(S(0), 0)"
+    assert str(normalize(zadd(z1, zneg(z1)), engine)) == "zint(0, 0)"
+    assert str(normalize(zneg(z1), engine)) == "zint(0, S(0))"
+    assert str(normalize(zadd(zint(S(S(zero_nat)), zero_nat), zint(zero_nat, S(zero_nat))), engine)) == "zint(S(0), 0)"
+
+    comm_goal = Clause((), eq(zadd(x, y), zadd(y, x)))
+    assert prove(comm_goal, engine, depth=8)
+    mul_comm_goal = Clause((), eq(zmul(x, y), zmul(y, x)))
+    assert prove(mul_comm_goal, engine, depth=8)
+
+    context_goal = Clause(((a, b),), eq(zadd(a, c), zadd(b, c)))
+    assert prove(context_goal, engine, depth=8)
+
+
 def test_lpo_decrease_non_ac_symbol() -> None:
     reset_var_interner()
 

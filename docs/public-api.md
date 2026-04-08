@@ -99,6 +99,7 @@ Most of the example scripts use these built-in theories:
 | Theory | What it gives you |
 | --- | --- |
 | `nat_theory()` | natural numbers and arithmetic symbols like `0`, `S`, `add` |
+| `int_theory()` | integer-ring symbols like `z0`, `z1`, `zadd`, `zmul`, `zneg` |
 | `list_theory()` | list constructors and functions like `nil`, `cons`, `append`, `length` |
 | `map_theory()` | finite map operations such as `empty`, `put`, `get` |
 | `tree_theory()` | tree constructors used by the tree examples |
@@ -257,6 +258,7 @@ print(render_proof_trace(trace))
 | Example | Main APIs to look at |
 | --- | --- |
 | `prove_add_associativity.py` | `V`, `Const`, `App`, `Clause`, `make_engine`, `install_theory`, `get_induction_scheme`, `prove_with_trace` |
+| `prove_int_ring_basics.py` | `int_theory`, AC-based proving with `prove_with_trace`, and contextual equalities via `Clause(assumptions=...)` |
 | `prove_append_associativity.py` | `V`, `App`, `Clause`, `list_theory`, `prove_with_trace`, `render_proof_trace` |
 | `prove_length_append.py` | same as above, plus installing both `nat_theory()` and `list_theory()` |
 | `prove_map_theorems.py` | `Clause(..., disequalities=...)` and `simplify_clause` |

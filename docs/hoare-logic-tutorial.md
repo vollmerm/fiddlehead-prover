@@ -1,15 +1,15 @@
 # Hoare-style proof tutorial for IMP programs
 
-This tutorial walks through how to build and prove simple Hoare-style program
-properties with Fiddlehead, following the same pattern used in
-`examples/prove_hoare_while.py`.
+This tutorial shows how `examples/prove_hoare_while.py` encodes IMP semantics
+and proves both execution properties and a real Hoare triple for a `while`
+program with an explicit invariant.
 
-The idea is:
+The workflow is:
 
 1. Encode IMP syntax and interpreter semantics as rewrite rules.
-2. State properties as equality goals (`eq(lhs, rhs)`).
-3. Let rewriting discharge execution facts.
-4. Use induction when a goal quantifies over command structure.
+2. Add assertion syntax and Hoare-judgment semantics.
+3. State goals as equality clauses (`eq(lhs, rhs)`).
+4. Use rewriting (and induction when needed) to discharge goals.
 
 ## 1. Start with an engine and base theories
 
@@ -61,6 +61,7 @@ In the full script, this includes:
 - IMP sorts: `AExp`, `BExp`, `Com`
 - syntax constructors: `aconst`, `aadd`, `blt`, `assign`, `while_cmd`, ...
 - interpreter functions: `eval_a`, `eval_b`, `exec`
+- assertion layer: `Assert`, `bassn`, `and_a`, `not_a`, `holds`, `hoare`
 
 If a symbol is missing a signature, term/rule validation will fail early.
 
@@ -120,7 +121,38 @@ register_induction_scheme(
 )
 ```
 
-## 6. Prove rewriting goals
+## 6. Add Hoare assertions and judgments
+
+The example introduces a shallow embedding of Hoare logic:
+
+```python
+bassn = lambda b: App("bassn", b)              # boolean-as-assertion
+and_a = lambda p, q: App("and_a", p, q)        # assertion conjunction
+not_a = lambda p: App("not_a", p)              # assertion negation
+holds = lambda p, s: App("holds", p, s)        # assertion satisfaction
+hoare = lambda p, c, q, s: App("hoare", p, c, q, s)
+```
+
+Core rewrite rules connect this to executable semantics:
+
+```python
+Rule(holds(and_a(p, q), s), App("and", holds(p, s), holds(q, s)))
+Rule(holds(not_a(p), s), App("not", holds(p, s)))
+Rule(holds(bassn(b), s), eval_b(b, s))
+Rule(hoare(p, c, q, s), App("if", holds(p, s), holds(q, exec_cmd(c, s)), true))
+```
+
+For while proofs with an explicit invariant `I` and guard `B`, the script also
+uses the specialized unfold:
+
+```python
+Rule(
+    hoare(I, while_cmd(B, body), and_a(I, not_a(bassn(B))), s),
+    App("if", holds(I, s), holds(and_a(I, not_a(bassn(B))), exec_cmd(while_cmd(B, body), s)), true),
+)
+```
+
+## 7. Prove rewriting goals
 
 A direct execution fact is usually just rewriting:
 
@@ -130,7 +162,7 @@ ok, trace = prove_with_trace(goal, engine, depth=8)
 assert ok
 ```
 
-Theorem 9 in `examples/prove_hoare_while.py` is the same style:
+Theorem 9 in `examples/prove_hoare_while.py` is still this style:
 
 ```python
 goal = Clause(
@@ -144,7 +176,7 @@ ok, trace = prove_with_trace(goal, engine, depth=20)
 The condition rewrites to `false`, then the `if(false, ..., s)` branch collapses
 to `s`.
 
-## 7. Prove induction goals
+## 8. Prove induction goals
 
 For determinism of execution:
 
@@ -161,7 +193,37 @@ assert prove_with_induction(det_goal, engine, c, scheme, depth=16, induction_dep
 
 Use this pattern whenever your theorem ranges over arbitrary commands.
 
-## 8. Practical checklist
+## 9. Prove a real Hoare while triple
+
+The headline Hoare theorem in the example is:
+
+```text
+{inv(x)} while false do x := x + 1 {inv(x) /\ not false}
+```
+
+encoded as:
+
+```python
+Clause(
+    ((holds(inv(x), s), true),),
+    eq(
+        hoare(
+            inv(x),
+            while_cmd(bconst(false), assign(x, aadd(avar(x), aconst(S(zero))))),
+            and_a(inv(x), not_a(bassn(bconst(false)))),
+            s,
+        ),
+        true,
+    ),
+    (),
+)
+```
+
+This is a genuine Hoare judgment (not just an execution equality): it proves
+that from the invariant precondition, the `while` command satisfies the expected
+postcondition `I /\ ¬B`.
+
+## 10. Practical checklist
 
 When a Hoare-style proof does not close:
 
@@ -170,10 +232,11 @@ When a Hoare-style proof does not close:
 3. Ensure rewrite scopes are synced and activated (`env._sync_engine_rules()`, `env.activate_scope(...)`).
 4. For recursive program properties, confirm the induction variable and scheme sort match.
 
-## 9. Run the example
+## 11. Run the example
 
 ```bash
 .venv/bin/python examples/prove_hoare_while.py
 ```
 
-This should print all nine theorems as proved.
+This should print all ten theorems as proved, including the explicit
+while-invariant Hoare theorem.

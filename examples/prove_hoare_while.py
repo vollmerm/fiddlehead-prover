@@ -27,6 +27,11 @@ def _print_language_and_semantics() -> None:
     print(
         "  exec(while_cmd(b,c), s) -> if(eval_b(b,s), exec(while_cmd(b,c), exec(c,s)), s)"
     )
+    print("\nHoare judgment semantics:")
+    print("  hoare(P, c, Q, s) -> if(holds(P, s), holds(Q, exec(c, s)), true)")
+    print("  holds(and_a(P,Q), s) -> and(holds(P,s), holds(Q,s))")
+    print("  holds(not_a(P), s) -> not(holds(P,s))")
+    print("  holds(bassn(b), s) -> eval_b(b, s)")
 
 
 def _prove_rewrite(
@@ -43,6 +48,25 @@ def _prove_rewrite(
     print(f"Proved: {ok}")
     if ok:
         print(f"Simplified to: {goal.goal} -> true")
+    else:
+        print(f"Failed! Goal normalized to: {engine.normalize(goal.goal)}")
+    return ok
+
+
+def _prove_hoare(
+    theorem_name: str,
+    statement: str,
+    goal: Clause,
+    engine: Engine,
+    depth: int,
+) -> bool:
+    print(f"\n=== {theorem_name} ===")
+    print(statement)
+    print("Hoare-style proof with explicit precondition and invariant\n")
+    ok, _trace = prove_with_trace(goal, engine, depth=depth)
+    print(f"Proved: {ok}")
+    if ok:
+        print("Hoare judgment simplified to: true")
     else:
         print(f"Failed! Goal normalized to: {engine.normalize(goal.goal)}")
     return ok
@@ -97,6 +121,12 @@ def main() -> None:
     c1 = V("c1", "Com")
     c2 = V("c2", "Com")
     c = V("c", "Com")
+    p_assert = V("p_assert", "Assert")
+    q_assert = V("q_assert", "Assert")
+    bh = V("bh", "BExp")
+    ch = V("ch", "Com")
+    guard = V("guard", "BExp")
+    invariant = V("invariant", "Assert")
 
     zero = Const("0")
     true = Const("true")
@@ -124,15 +154,22 @@ def main() -> None:
     seq = lambda first, second: App("seq", first, second)
     if_cmd = lambda cond, then_cmd, else_cmd: App("if_cmd", cond, then_cmd, else_cmd)
     while_cmd = lambda cond, body: App("while_cmd", cond, body)
+    bassn = lambda cond: App("bassn", cond)
+    and_a = lambda lhs, rhs: App("and_a", lhs, rhs)
+    not_a = lambda term: App("not_a", term)
+    inv = lambda key: App("inv", key)
 
     eval_a = lambda expr, state: App("eval_a", expr, state)
     eval_b = lambda expr, state: App("eval_b", expr, state)
     exec_cmd = lambda cmd, state: App("exec", cmd, state)
     blt_nat = lambda lhs, rhs: App("blt_nat", lhs, rhs)
+    holds = lambda assertion, state: App("holds", assertion, state)
+    hoare = lambda pre, cmd, post, state: App("hoare", pre, cmd, post, state)
 
     engine.sort_arities["AExp"] = 0
     engine.sort_arities["BExp"] = 0
     engine.sort_arities["Com"] = 0
+    engine.sort_arities["Assert"] = 0
 
     register_sort_signature(
         engine, "aconst", SortSignature((TypeConst("Nat"),), TypeConst("AExp"))
@@ -206,6 +243,36 @@ def main() -> None:
         "nat_of",
         SortSignature((TypeConst("Option", (TypeConst("Nat"),)),), TypeConst("Nat")),
     )
+    register_sort_signature(
+        engine, "bassn", SortSignature((TypeConst("BExp"),), TypeConst("Assert"))
+    )
+    register_sort_signature(
+        engine,
+        "and_a",
+        SortSignature((TypeConst("Assert"), TypeConst("Assert")), TypeConst("Assert")),
+    )
+    register_sort_signature(
+        engine, "not_a", SortSignature((TypeConst("Assert"),), TypeConst("Assert"))
+    )
+    register_sort_signature(engine, "inv", SortSignature((a,), TypeConst("Assert")))
+    register_sort_signature(
+        engine,
+        "holds",
+        SortSignature((TypeConst("Assert"), TypeConst("Map", (k, v))), TypeConst("Bool")),
+    )
+    register_sort_signature(
+        engine,
+        "hoare",
+        SortSignature(
+            (
+                TypeConst("Assert"),
+                TypeConst("Com"),
+                TypeConst("Assert"),
+                TypeConst("Map", (k, v)),
+            ),
+            TypeConst("Bool"),
+        ),
+    )
 
     precedence = {
         "aconst": 5,
@@ -224,6 +291,12 @@ def main() -> None:
         "eval_b": 5,
         "exec": 5,
         "nat_of": 5,
+        "bassn": 4,
+        "and_a": 3,
+        "not_a": 4,
+        "inv": 5,
+        "holds": 5,
+        "hoare": 2,
     }
     engine.config.precedence.update(precedence)
 
@@ -267,10 +340,10 @@ def main() -> None:
     )
     env.register_rule(
         Rule(
-            exec_cmd(while_cmd(V("bh"), V("ch")), s),
+            exec_cmd(while_cmd(bh, ch), s),
             if_term(
-                eval_b(V("bh"), s),
-                exec_cmd(while_cmd(V("bh"), V("ch")), exec_cmd(V("ch"), s)),
+                eval_b(bh, s),
+                exec_cmd(while_cmd(bh, ch), exec_cmd(ch, s)),
                 s,
             ),
             skip_decrease_check=True,
@@ -318,6 +391,59 @@ def main() -> None:
         Rule(blt_nat(refl_nat, refl_nat), false, skip_decrease_check=True),
         "imp_def",
         "blt_nat_refl",
+    )
+    env.register_rule(
+        Rule(
+            holds(and_a(p_assert, q_assert), s),
+            App("and", holds(p_assert, s), holds(q_assert, s)),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "holds_and",
+    )
+    env.register_rule(
+        Rule(
+            holds(not_a(p_assert), s),
+            App("not", holds(p_assert, s)),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "holds_not",
+    )
+    env.register_rule(
+        Rule(holds(bassn(guard), s), eval_b(guard, s), skip_decrease_check=True),
+        "imp_def",
+        "holds_bassn",
+    )
+    env.register_rule(
+        Rule(
+            hoare(p_assert, c, q_assert, s),
+            if_term(holds(p_assert, s), holds(q_assert, exec_cmd(c, s)), true),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "hoare_semantics",
+    )
+    env.register_rule(
+        Rule(
+            hoare(
+                invariant,
+                while_cmd(guard, ch),
+                and_a(invariant, not_a(bassn(guard))),
+                s,
+            ),
+            if_term(
+                holds(invariant, s),
+                holds(
+                    and_a(invariant, not_a(bassn(guard))),
+                    exec_cmd(while_cmd(guard, ch), s),
+                ),
+                true,
+            ),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "hoare_while_unfold",
     )
 
     env._sync_engine_rules()
@@ -450,6 +576,30 @@ def main() -> None:
             ),
             engine,
             depth=20,
+        )
+    )
+    goals_ok.append(
+        _prove_hoare(
+            "Theorem 10: Hoare while-rule instance with explicit invariant",
+            "{inv(x)} while false do x := x + 1 {inv(x) /\\ not false}",
+            Clause(
+                ((holds(inv(x), s), true),),
+                eq(
+                    hoare(
+                        inv(x),
+                        while_cmd(
+                            bconst(false),
+                            assign(x, aadd(avar(x), aconst(succ(zero)))),
+                        ),
+                        and_a(inv(x), not_a(bassn(bconst(false)))),
+                        s,
+                    ),
+                    true,
+                ),
+                (),
+            ),
+            engine,
+            depth=24,
         )
     )
 

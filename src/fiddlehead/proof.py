@@ -191,38 +191,46 @@ def simplify_clause_with_stages(
     """Simplify a clause and return intermediate stage snapshots."""
 
     stages: list[tuple[str, Clause]] = []
-    _validate_clause_sorts(clause, engine, "clause")
+    current = clause
+    for _ in range(4):
+        _validate_clause_sorts(current, engine, "clause")
 
-    assumptions = _simplify_assumptions(clause.assumptions, engine)
-    disequalities = _simplify_disequalities(clause.disequalities, engine)
-    stage_clause = Clause(assumptions, clause.goal, disequalities)
-    stages.append(("assumptions", stage_clause))
+        assumptions = _simplify_assumptions(current.assumptions, engine)
+        disequalities = _simplify_disequalities(current.disequalities, engine)
+        stage_clause = Clause(assumptions, current.goal, disequalities)
+        stages.append(("assumptions", stage_clause))
 
-    base_goal = _normalize_with_rules_only(stage_clause.goal, engine)
-    stage_clause = Clause(assumptions, base_goal, disequalities)
-    stages.append(("rule-goal", stage_clause))
+        base_goal = _normalize_with_rules_only(stage_clause.goal, engine)
+        stage_clause = Clause(assumptions, base_goal, disequalities)
+        stages.append(("rule-goal", stage_clause))
 
-    local_engine = make_engine(
-        rules=engine.rules,
-        ctx=_build_context(assumptions, disequalities),
-        trace=engine.trace,
-        fuel=engine.fuel,
-        config=engine.config,
-        ground_cache=engine.ground_cache,
-        schemes=engine.schemes,
-        sort_signatures=engine.sort_signatures,
-        sort_arities=engine.sort_arities,
-    )
-    contextual_goal = normalize(base_goal, local_engine)
-    stage_clause = Clause(assumptions, contextual_goal, disequalities)
-    stages.append(("context-goal", stage_clause))
+        local_engine = make_engine(
+            rules=engine.rules,
+            ctx=_build_context(assumptions, disequalities),
+            trace=engine.trace,
+            fuel=engine.fuel,
+            config=engine.config,
+            ground_cache=engine.ground_cache,
+            schemes=engine.schemes,
+            sort_signatures=engine.sort_signatures,
+            sort_arities=engine.sort_arities,
+        )
+        contextual_goal = normalize(base_goal, local_engine)
+        stage_clause = Clause(assumptions, contextual_goal, disequalities)
+        stages.append(("context-goal", stage_clause))
 
-    eq_goal = goal_equality(contextual_goal)
-    if eq_goal is not None and local_engine.holds(eq_goal[0], eq_goal[1]):
-        stage_clause = Clause(assumptions, true, disequalities)
-        stages.append(("context-solved", stage_clause))
+        eq_goal = goal_equality(contextual_goal)
+        if eq_goal is not None and local_engine.holds(eq_goal[0], eq_goal[1]):
+            stage_clause = Clause(assumptions, true, disequalities)
+            stages.append(("context-solved", stage_clause))
 
-    return stage_clause, stages
+        if clause_solved(stage_clause):
+            return stage_clause, stages
+        if stage_clause == current:
+            return stage_clause, stages
+        current = stage_clause
+
+    return current, stages
 
 
 def _normalize_with_rules_only(term: Term, engine: Engine) -> Term:

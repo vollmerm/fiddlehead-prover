@@ -90,16 +90,21 @@ def builtin_rules() -> list[Rule]:
         Rule(App("neq", x, x), false),
         Rule(App("if", true, x, y), x),
         Rule(App("if", false, x, y), y),
+        Rule(App("if", x, y, y), y),
+        Rule(App("if", x, true, true), true),
+        Rule(App("if", x, false, false), false),
         Rule(App("not", true), false),
         Rule(App("not", false), true),
         Rule(App("and", true, x), x),
         Rule(App("and", false, x), false),
         Rule(App("and", x, true), x),
         Rule(App("and", x, false), false),
+        Rule(App("and", x, x), x),
         Rule(App("or", true, x), true),
         Rule(App("or", false, x), x),
         Rule(App("or", x, true), true),
         Rule(App("or", x, false), x),
+        Rule(App("or", x, x), x),
     ]
 
 

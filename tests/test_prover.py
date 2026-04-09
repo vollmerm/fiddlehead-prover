@@ -214,6 +214,18 @@ def test_disequality_simplification_and_split_branch_contexts(env) -> None:  # t
     assert bool_branches[1].disequalities == ()
 
 
+def test_contextual_if_simplification_uses_assumptions(env) -> None:  # type: ignore
+    engine = env["engine"]
+    x = env["x"]
+    zero = env["zero"]
+
+    goal = App("if", App("eq", x, zero), App("eq", x, zero), true)
+    clause = Clause(((App("eq", x, zero), true),), goal)
+
+    simplified = simplify_clause(clause, engine)
+    assert simplified.goal == true
+
+
 def test_builtin_rules_do_not_claim_common_variable_names() -> None:
     reset_var_interner()
     builtin_rules()
@@ -305,6 +317,84 @@ def test_induction_branches_and_proofs(env) -> None:  # type: ignore
     len_append_goal = Clause((), eq(length(app(xs, ys)), add(length(xs), length(ys))))
     assert prove_with_induction(
         len_append_goal, engine, xs, list_scheme, depth=14, induction_depth=1
+    )
+
+
+def test_inductive_repeat_skip_exec_proves() -> None:
+    reset_var_interner()
+    engine = make_engine(rules=builtin_rules())
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, map_theory(), activate_scopes=True)
+
+    k = TypeVar("K")
+    v = TypeVar("V")
+    engine.sort_arities["Com"] = 0
+    skip = Const("skip")
+    s = V("s", "Map")
+    n = V("n", "Nat")
+    repeat_skip = lambda count: App("repeat_skip", count)
+    seq = lambda first, second: App("seq", first, second)
+    exec_cmd = lambda cmd, state: App("exec", cmd, state)
+    eq = lambda a, b: App("eq", a, b)
+
+    register_sort_signature(engine, "skip", SortSignature((), TypeConst("Com")))
+    register_sort_signature(
+        engine, "seq", SortSignature((TypeConst("Com"), TypeConst("Com")), TypeConst("Com"))
+    )
+    register_sort_signature(
+        engine,
+        "exec",
+        SortSignature(
+            (TypeConst("Com"), TypeConst("Map", (k, v))),
+            TypeConst("Map", (k, v)),
+        ),
+    )
+    register_sort_signature(
+        engine, "repeat_skip", SortSignature((TypeConst("Nat"),), TypeConst("Com"))
+    )
+
+    env_theory = get_theorem_environment(engine)
+    n_rep = V("n_rep", "Nat")
+    env_theory.register_definition(
+        "repeat_skip_zero", repeat_skip(Const("0")), skip, scope="imp_def"
+    )
+    register_recursive_definition(
+        engine,
+        "repeat_skip",
+        (
+            (
+                repeat_skip(App("S", n_rep)),
+                seq(skip, repeat_skip(n_rep)),
+            ),
+        ),
+        signature=SortSignature((TypeConst("Nat"),), TypeConst("Com")),
+        scope="imp_def",
+    )
+    c1 = V("c1", "Com")
+    c2 = V("c2", "Com")
+    s_exec = V("s_exec", "Map")
+    env_theory.register_rule(
+        Rule(exec_cmd(skip, s_exec), s_exec), "imp_def", name="exec_skip"
+    )
+    env_theory.register_rule(
+        Rule(exec_cmd(seq(c1, c2), s_exec), exec_cmd(c2, exec_cmd(c1, s_exec))),
+        "imp_def",
+        name="exec_seq",
+    )
+    env_theory.activate_scope("imp_def")
+
+    goal = Clause((), eq(exec_cmd(repeat_skip(n), s), s), ())
+
+    nat_scheme = get_induction_scheme(engine, "nat")
+    assert nat_scheme is not None
+    assert prove_with_induction(
+        goal,
+        engine,
+        n,
+        nat_scheme,
+        depth=20,
+        induction_depth=2,
+        generalize=False,
     )
 
 

@@ -138,6 +138,7 @@ class ProofSession:
                 children=stage_nodes + [_new_node("goal", simplified)],
             )
             self.goals = self.goals[1:]
+            self._sync_ih_rules()
             return
         self._record(
             "session-simp",
@@ -146,6 +147,7 @@ class ProofSession:
             children=stage_nodes + [_new_node("goal", simplified)],
         )
         self.goals[0] = simplified
+        self._sync_ih_rules()
 
     def split(self) -> None:
         """Split the current goal into branch subgoals."""

@@ -106,6 +106,7 @@ def main() -> None:
 
     engine = make_engine(rules=builtin_rules())
     install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, list_theory(), activate_scopes=True)
     install_theory(engine, map_theory(), activate_scopes=True)
 
     a = TypeVar("A")
@@ -127,6 +128,7 @@ def main() -> None:
     c = V("c", "Com")
     p_assert = V("p_assert", "Assert")
     q_assert = V("q_assert", "Assert")
+    p_bool = V("p_bool", "Bool")
     bh = V("bh", "BExp")
     ch = V("ch", "Com")
     guard = V("guard", "BExp")
@@ -152,6 +154,7 @@ def main() -> None:
     avar = lambda t: App("avar", t)
     aadd = lambda lhs, rhs: App("aadd", lhs, rhs)
     asub = lambda lhs, rhs: App("asub", lhs, rhs)
+    repeat_set = lambda value, count: App("repeat_set", value, count)
 
     bconst = lambda t: App("bconst", t)
     blt = lambda lhs, rhs: App("blt", lhs, rhs)
@@ -228,6 +231,11 @@ def main() -> None:
         engine,
         "while_cmd",
         SortSignature((TypeConst("BExp"), TypeConst("Com")), TypeConst("Com")),
+    )
+    register_sort_signature(
+        engine,
+        "repeat_set",
+        SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Com")),
     )
     register_sort_signature(
         engine,
@@ -388,6 +396,19 @@ def main() -> None:
     )
     env.register_rule(
         Rule(
+            put(
+                put(V("m_map", "Map"), V("k_map", "VarId"), V("v_map", "Nat")),
+                V("k_map", "VarId"),
+                V("v_map", "Nat"),
+            ),
+            put(V("m_map", "Map"), V("k_map", "VarId"), V("v_map", "Nat")),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        name="put_put_same",
+    )
+    env.register_rule(
+        Rule(
             exec_cmd(while_cmd(bh, ch), s),
             if_term(
                 eval_b(bh, s),
@@ -481,6 +502,16 @@ def main() -> None:
         "imp_def",
         name="holds_aeq",
     )
+    env.register_rule(
+        Rule(if_term(p_bool, p_bool, true), true, skip_decrease_check=True),
+        "imp_def",
+        name="if_same_true",
+    )
+    env.register_rule(
+        Rule(if_term(p_bool, true, true), true, skip_decrease_check=True),
+        "imp_def",
+        name="if_true_true",
+    )
     one = succ(zero)
     two = succ(one)
     hoare_semantics_rule = Rule(
@@ -488,6 +519,27 @@ def main() -> None:
         if_term(holds(p_assert, s), holds(q_assert, exec_cmd(c, s)), true),
     )
     env.register_rule(hoare_semantics_rule, "imp_def", name="hoare_semantics")
+
+    n_rep = V("n_rep", "Nat")
+    m_rep = V("m_rep", "Nat")
+    env.register_definition(
+        "repeat_set_zero", repeat_set(m_rep, zero), skip, scope="imp_def"
+    )
+    register_recursive_definition(
+        engine,
+        "repeat_set",
+        (
+            (
+                repeat_set(m_rep, succ(n_rep)),
+                seq(
+                    assign(x_id, aconst(m_rep)),
+                    repeat_set(m_rep, n_rep),
+                ),
+            ),
+        ),
+        signature=SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Com")),
+        scope="imp_def",
+    )
 
     env._sync_engine_rules()
     env.activate_scope("imp_def")
@@ -775,6 +827,36 @@ def main() -> None:
     theorem_13_ok = session.qed()
     print(f"Proved: {theorem_13_ok}\n")
 
+    print("\n=== Theorem 14: Execution of repeated assignment ===")
+    print("exec(repeat_set(m, n), put(s, x=m)) = put(s, x=m)")
+    print("Proof by induction on n:\n")
+
+    m_repeat_nat = V("m_repeat_nat", "Nat")
+    theorem_14_goal = Clause(
+        (),
+        eq(
+            exec_cmd(repeat_set(m_repeat_nat, n), put(s, x_id, m_repeat_nat)),
+            put(s, x_id, m_repeat_nat),
+        ),
+        (),
+    )
+
+    session = ProofSession(theorem_14_goal, engine)
+    session.activate_scope("imp_def")
+    session.induct(n)
+    session.rewrite_first("def-repeat_set_zero")
+    session.rewrite_first("exec_skip")
+    session.simp()
+    session.rewrite_first("def-repeat_set.0")
+    session.rewrite_first("exec_seq")
+    session.rewrite_first("exec_assign")
+    session.rewrite_first("IH.0")
+    session.simp()
+    if session.goals:
+        session.exact()
+    theorem_14_ok = session.qed()
+    print(f"Proved: {theorem_14_ok}\n")
+
     if (
         all(goals_ok)
         and theorem_9_ok
@@ -782,6 +864,7 @@ def main() -> None:
         and theorem_11_ok
         and theorem_12_ok
         and theorem_13_ok
+        and theorem_14_ok
     ):
         print("=== All theorems proved! ===")
     else:

@@ -266,7 +266,60 @@ automated proof, but you control the order of rewriting and simplification.
 
 ---
 
-## 10. Common beginner mistakes
+## 10. A more interesting inductive theorem
+
+The final theorem in the example is no longer a one-step Hoare proof. It shows
+how to reason inductively about a recursive IMP command:
+
+```text
+exec(repeat_set(m, n), put(s, x=m)) = put(s, x=m)
+```
+
+The recursive command is defined so that:
+
+```python
+repeat_set(m, 0) = skip
+repeat_set(m, S(n)) = seq(assign(x, aconst(m)), repeat_set(m, n))
+```
+
+This theorem is interesting because the proof needs both unfolding and the
+induction hypothesis. In the base case, `repeat_set(m, 0)` becomes `skip`, so
+`exec(skip, ...)` simplifies immediately. In the step case, the recursive call
+is exposed only after rewriting the command definition and execution semantics.
+
+The proof script follows this shape:
+
+```python
+session = ProofSession(theorem_14_goal, engine)
+session.activate_scope("imp_def")
+session.induct(n)
+
+session.rewrite_first("def-repeat_set_zero")
+session.rewrite_first("exec_skip")
+session.simp()
+
+session.rewrite_first("def-repeat_set.0")
+session.rewrite_first("exec_seq")
+session.rewrite_first("exec_assign")
+session.rewrite_first("IH.0")
+session.simp()
+```
+
+What is happening here:
+
+1. `induct(n)` splits the goal into the base case and step case.
+2. The base case rewrites `repeat_set(m, 0)` to `skip`, then `exec_skip`
+   closes it.
+3. The step case unfolds `repeat_set(m, S(n))` into a sequence.
+4. `exec_seq` and `exec_assign` expose the recursive call under `exec`.
+5. `IH.0` rewrites that recursive call away, and `simp()` finishes the goal.
+
+This is the kind of theorem that benefits from the stronger simplification and
+induction handling in the prover core.
+
+---
+
+## 11. Common beginner mistakes
 
 1. Missing sort signature for a new symbol.
 2. Using inconsistent variable sorts.
@@ -275,7 +328,7 @@ automated proof, but you control the order of rewriting and simplification.
 
 ---
 
-## 11. Suggested next exercises
+## 12. Suggested next exercises
 
 1. Change the postcondition to `x=3` and confirm the theorem fails.
 2. Replace the conditional with `if x<1 then ... else ...` and update the proof.
@@ -284,7 +337,7 @@ automated proof, but you control the order of rewriting and simplification.
 
 ---
 
-## 12. Run the tutorial example
+## 13. Run the tutorial example
 
 ```bash
 .venv/bin/python examples/prove_hoare_while.py

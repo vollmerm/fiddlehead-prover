@@ -319,29 +319,10 @@ induction handling in the prover core.
 
 ---
 
-## 11. Common beginner mistakes
-
-1. Missing sort signature for a new symbol.
-2. Using inconsistent variable sorts.
-3. Forgetting a bridge rule (for example `exec(if_cmd(...))` or `nat_of(some(n))`).
-4. Writing a non-decreasing rule that causes rewrite divergence.
-
----
-
-## 12. Suggested next exercises
-
-1. Change the postcondition to `x=3` and confirm the theorem fails.
-2. Replace the conditional with `if x<1 then ... else ...` and update the proof.
-3. Add a second theorem with conjunction in the postcondition:
-   `and_a(aeq(x, two), not_a(bassn(blt(avar(x), aconst(two)))))`.
-
----
-
 ## 13. Run the tutorial example
 
 ```bash
-.venv/bin/python examples/prove_hoare_while.py
+python examples/prove_hoare_while.py
 ```
 
-You should see all theorems proved, including the Hoare sequence/conditional
-theorem.
+You should see all theorems proved.

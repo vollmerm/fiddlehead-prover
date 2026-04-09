@@ -157,6 +157,18 @@ def test_trace_clause_and_cache_basics(env) -> None:  # type: ignore
     assert clause_solved(simplify_clause(clause3, engine))
 
 
+def test_normalize_reaches_fixpoint_across_child_rewrites(env) -> None:  # type: ignore
+    add = env["add"]
+    S = env["S"]
+    zero = env["zero"]
+    one = env["one"]
+    eq = env["eq"]
+    engine = env["engine"]
+
+    term = App("if", eq(add(S(zero), zero), S(zero)), zero, one)
+    assert normalize(term, engine) == zero
+
+
 def test_disequality_simplification_and_split_branch_contexts(env) -> None:  # type: ignore
     x = env["x"]
     y = env["y"]

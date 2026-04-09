@@ -625,6 +625,10 @@ class Engine:
         self._ensure_eq_classes(term)
 
         for _ in range(self.fuel):
+            # rewrite_term performs a single rewrite layer, so memoized results are
+            # only valid within one layer. Clearing avoids reusing stale
+            # intermediate forms across normalize iterations.
+            self.memo = {}
             if is_ground(term) and term in self.ground_cache:
                 cached = self.ground_cache[term]
                 if original_is_ground:
@@ -632,7 +636,7 @@ class Engine:
                 return cached
 
             rewritten = self.rewrite_term(term)
-            if rewritten is term:
+            if rewritten == term:
                 break
             term = rewritten
 

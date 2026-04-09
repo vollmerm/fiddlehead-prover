@@ -268,7 +268,9 @@ def main() -> None:
     register_sort_signature(
         engine,
         "holds",
-        SortSignature((TypeConst("Assert"), TypeConst("Map", (k, v))), TypeConst("Bool")),
+        SortSignature(
+            (TypeConst("Assert"), TypeConst("Map", (k, v))), TypeConst("Bool")
+        ),
     )
     register_sort_signature(
         engine,
@@ -326,7 +328,9 @@ def main() -> None:
     )
 
     env = get_theorem_environment(engine)
-    env.register_rule(Rule(eval_a(avar(x), s), nat_of(get(s, x))), "imp_def", "eval_avar")
+    env.register_rule(
+        Rule(eval_a(avar(x), s), nat_of(get(s, x))), "imp_def", name="eval_avar"
+    )
     env.register_rule(
         Rule(
             eval_a(avar(x_id), s),
@@ -334,28 +338,34 @@ def main() -> None:
             skip_decrease_check=True,
         ),
         "imp_def",
-        "eval_avar_x_id",
+        name="eval_avar_x_id",
     )
     env.register_rule(
         Rule(nat_of(some(n)), n, skip_decrease_check=True),
         "imp_def",
-        "nat_of_some",
+        name="nat_of_some",
     )
     env.register_rule(
         Rule(nat_of(none), zero, skip_decrease_check=True),
         "imp_def",
-        "nat_of_none",
+        name="nat_of_none",
     )
-    env.register_rule(Rule(exec_cmd(skip, s), s, skip_decrease_check=True), "imp_def", "exec_skip")
     env.register_rule(
-        Rule(exec_cmd(assign(x, e), s), put(s, x, eval_a(e, s)), skip_decrease_check=True),
+        Rule(exec_cmd(skip, s), s, skip_decrease_check=True),
         "imp_def",
-        "exec_assign",
+        name="exec_skip",
+    )
+    env.register_rule(
+        Rule(
+            exec_cmd(assign(x, e), s), put(s, x, eval_a(e, s)), skip_decrease_check=True
+        ),
+        "imp_def",
+        name="exec_assign",
     )
     env.register_rule(
         Rule(exec_cmd(seq(c1, c2), s), exec_cmd(c2, exec_cmd(c1, s))),
         "imp_def",
-        "exec_seq",
+        name="exec_seq",
     )
     env.register_rule(
         Rule(
@@ -364,17 +374,17 @@ def main() -> None:
             skip_decrease_check=True,
         ),
         "imp_def",
-        "exec_if",
+        name="exec_if",
     )
     env.register_rule(
         Rule(exec_cmd(if_cmd(bconst(true), c1, c2), s), exec_cmd(c1, s)),
         "imp_def",
-        "exec_if_true",
+        name="exec_if_true",
     )
     env.register_rule(
         Rule(exec_cmd(if_cmd(bconst(false), c1, c2), s), exec_cmd(c2, s)),
         "imp_def",
-        "exec_if_false",
+        name="exec_if_false",
     )
     env.register_rule(
         Rule(
@@ -384,20 +394,28 @@ def main() -> None:
                 exec_cmd(while_cmd(bh, ch), exec_cmd(ch, s)),
                 s,
             ),
+        ),
+        "imp_def",
+        name="exec_while",
+    )
+    env.register_rule(
+        Rule(
+            exec_cmd(while_cmd(bconst(false), ch), s),
+            s,
             skip_decrease_check=True,
         ),
         "imp_def",
-        "exec_while",
+        name="exec_while_false",
     )
     env.register_rule(
         Rule(eval_b(bconst(true), s), true, skip_decrease_check=True),
         "imp_def",
-        "eval_b_const_true",
+        name="eval_b_const_true",
     )
     env.register_rule(
         Rule(eval_b(bconst(false), s), false, skip_decrease_check=True),
         "imp_def",
-        "eval_b_const_false",
+        name="eval_b_const_false",
     )
     env.register_rule(
         Rule(
@@ -406,29 +424,34 @@ def main() -> None:
             skip_decrease_check=True,
         ),
         "imp_def",
-        "eval_b_blt",
+        name="eval_b_blt",
     )
-    env.register_rule(Rule(blt_nat(zero, zero), false), "imp_def", "blt_nat_zero_zero")
+    env.register_rule(
+        Rule(blt_nat(zero, zero), false), "imp_def", name="blt_nat_zero_zero"
+    )
     env.register_rule(
         Rule(blt_nat(zero, succ(V("n_nat"))), true),
         "imp_def",
-        "blt_nat_zero_succ",
+        name="blt_nat_zero_succ",
     )
     env.register_rule(
         Rule(blt_nat(succ(V("n_nat2")), zero), false),
         "imp_def",
-        "blt_nat_succ_zero",
+        name="blt_nat_succ_zero",
     )
     env.register_rule(
-        Rule(blt_nat(succ(V("n_nat3")), succ(V("m_nat"))), blt_nat(V("n_nat3"), V("m_nat"))),
+        Rule(
+            blt_nat(succ(V("n_nat3")), succ(V("m_nat"))),
+            blt_nat(V("n_nat3"), V("m_nat")),
+        ),
         "imp_def",
-        "blt_nat_succ_succ",
+        name="blt_nat_succ_succ",
     )
     refl_nat = V("k_nat")
     env.register_rule(
         Rule(blt_nat(refl_nat, refl_nat), false, skip_decrease_check=True),
         "imp_def",
-        "blt_nat_refl",
+        name="blt_nat_refl",
     )
     env.register_rule(
         Rule(
@@ -437,7 +460,7 @@ def main() -> None:
             skip_decrease_check=True,
         ),
         "imp_def",
-        "holds_and",
+        name="holds_and",
     )
     env.register_rule(
         Rule(
@@ -446,29 +469,25 @@ def main() -> None:
             skip_decrease_check=True,
         ),
         "imp_def",
-        "holds_not",
+        name="holds_not",
     )
     env.register_rule(
         Rule(holds(bassn(guard), s), eval_b(guard, s), skip_decrease_check=True),
         "imp_def",
-        "holds_bassn",
+        name="holds_bassn",
     )
     env.register_rule(
         Rule(holds(aeq(x, n), s), eq(get(s, x), some(n)), skip_decrease_check=True),
         "imp_def",
-        "holds_aeq",
+        name="holds_aeq",
     )
     one = succ(zero)
     two = succ(one)
-    env.register_rule(
-        Rule(
-            hoare(p_assert, c, q_assert, s),
-            if_term(holds(p_assert, s), holds(q_assert, exec_cmd(c, s)), true),
-            skip_decrease_check=True,
-        ),
-        "imp_def",
-        "hoare_semantics",
+    hoare_semantics_rule = Rule(
+        hoare(p_assert, c, q_assert, s),
+        if_term(holds(p_assert, s), holds(q_assert, exec_cmd(c, s)), true),
     )
+    env.register_rule(hoare_semantics_rule, "imp_def", name="hoare_semantics")
 
     env._sync_engine_rules()
     env.activate_scope("imp_def")
@@ -528,7 +547,11 @@ def main() -> None:
         _prove_rewrite(
             "Theorem 4: Assignment followed by skip",
             "forall x, e, s: exec(seq(assign(x,e), skip), s) = put(s, x, eval_a(e,s))",
-            Clause((), eq(exec_cmd(seq(assign(x, e), skip), s), put(s, x, eval_a(e, s))), ()),
+            Clause(
+                (),
+                eq(exec_cmd(seq(assign(x, e), skip), s), put(s, x, eval_a(e, s))),
+                (),
+            ),
             engine,
             depth=10,
         )
@@ -541,7 +564,11 @@ def main() -> None:
                 (),
                 eq(
                     exec_cmd(seq(assign(x, e1), assign(y, e2)), s),
-                    put(put(s, x, eval_a(e1, s)), y, eval_a(e2, put(s, x, eval_a(e1, s)))),
+                    put(
+                        put(s, x, eval_a(e1, s)),
+                        y,
+                        eval_a(e2, put(s, x, eval_a(e1, s))),
+                    ),
                 ),
                 (),
             ),
@@ -575,7 +602,9 @@ def main() -> None:
         _prove_rewrite(
             "Theorem 7: If-else true branch",
             "if true then c1 else c2 = c1",
-            Clause((), eq(exec_cmd(if_cmd(bconst(true), c1, c2), s), exec_cmd(c1, s)), ()),
+            Clause(
+                (), eq(exec_cmd(if_cmd(bconst(true), c1, c2), s), exec_cmd(c1, s)), ()
+            ),
             engine,
             depth=8,
         )
@@ -584,57 +613,179 @@ def main() -> None:
         _prove_rewrite(
             "Theorem 8: If-else false branch",
             "if false then c1 else c2 = c2",
-            Clause((), eq(exec_cmd(if_cmd(bconst(false), c1, c2), s), exec_cmd(c2, s)), ()),
+            Clause(
+                (), eq(exec_cmd(if_cmd(bconst(false), c1, c2), s), exec_cmd(c2, s)), ()
+            ),
             engine,
             depth=8,
         )
     )
-    goals_ok.append(
-        _prove_rewrite(
-            "Theorem 9: While loop with reducible blt condition",
-            "While blt(S(0), 0) do skip = skip (blt(S(0), 0) rewrites to false)",
-            Clause(
-                (),
-                eq(exec_cmd(while_cmd(blt(aconst(succ(zero)), aconst(zero)), skip), s), s),
-                (),
-            ),
-            engine,
-            depth=20,
-        )
-    )
-    goals_ok.append(
-        _prove_hoare(
-            "Theorem 10: Hoare proof for sequence + conditional",
-            "{x=0} x:=1; if x<2 then x:=2 else x:=3 {x=2}",
-            Clause(
-                (),
-                eq(
-                    hoare(
-                        aeq(x_id, zero),
-                        seq(
-                            assign(x_id, aconst(one)),
-                            if_cmd(
-                                blt(avar(x_id), aconst(two)),
-                                assign(x_id, aconst(two)),
-                                assign(x_id, aconst(succ(two))),
-                            ),
-                        ),
-                        aeq(x_id, two),
-                        put(empty, x_id, zero),
-                    ),
-                    true,
-                ),
-                (),
-            ),
-            engine,
-            depth=24,
-        )
+
+    print("\n=== Theorem 9: While loop with reducible blt condition ===")
+    print("While blt(S(0), 0) do skip = skip (blt(S(0), 0) rewrites to false)")
+    print("Manual proof using ProofSession:\n")
+
+    while_blt_goal = Clause(
+        (),
+        eq(
+            exec_cmd(while_cmd(blt(aconst(succ(zero)), aconst(zero)), skip), s),
+            s,
+        ),
+        (),
     )
 
-    if all(goals_ok):
-        print("\n=== All theorems proved! ===")
+    session = ProofSession(while_blt_goal, engine)
+    session.activate_scope("imp_def")
+
+    session.rewrite_first("exec_while")
+    session.simp()
+    theorem_9_ok = session.qed()
+    print(f"Proved: {theorem_9_ok}\n")
+
+    print("\n=== Theorem 10: Hoare proof for sequence + conditional ===")
+    print("{x=0} x:=1; if x<2 then x:=2 else x:=3 {x=2}")
+    print("Manual proof using ProofSession:\n")
+
+    theorem_10_goal = Clause(
+        (),
+        eq(
+            hoare(
+                aeq(x_id, zero),
+                seq(
+                    assign(x_id, aconst(one)),
+                    if_cmd(
+                        blt(avar(x_id), aconst(two)),
+                        assign(x_id, aconst(two)),
+                        assign(x_id, aconst(succ(two))),
+                    ),
+                ),
+                aeq(x_id, two),
+                put(empty, x_id, zero),
+            ),
+            true,
+        ),
+        (),
+    )
+
+    session = ProofSession(theorem_10_goal, engine)
+    session.activate_scope("imp_def")
+
+    session.rewrite_first("hoare_semantics")
+    session.rewrite_first("holds_aeq")
+    session.simp()
+    theorem_10_ok = session.qed()
+    print(f"Proved: {theorem_10_ok}\n")
+
+    print("\n=== Theorem 11: Hoare proof of if-true ===")
+    print("{x=1} if true then x:=2 else x:=3 {x=2}")
+    print("Manual proof using ProofSession:\n")
+
+    one = succ(zero)
+    two = succ(one)
+    initial_state = put(empty, x_id, zero)
+
+    if_true_goal = Clause(
+        (),
+        eq(
+            hoare(
+                aeq(x_id, zero),
+                if_cmd(
+                    bconst(true),
+                    assign(x_id, aconst(two)),
+                    assign(x_id, aconst(succ(two))),
+                ),
+                aeq(x_id, two),
+                initial_state,
+            ),
+            true,
+        ),
+        (),
+    )
+
+    session = ProofSession(if_true_goal, engine)
+    session.activate_scope("imp_def")
+
+    session.rewrite_first("hoare_semantics")
+    session.rewrite_first("holds_aeq")
+    session.simp()
+    theorem_11_ok = session.qed()
+    print(f"Proved: {theorem_11_ok}\n")
+
+    print("\n=== Theorem 12: Hoare proof of while-loop with false condition ===")
+    print("{P} while false do c {P} - loop never executes, invariant preserved")
+    print("Manual proof using ProofSession:\n")
+
+    initial_state = put(empty, x_id, zero)
+    while_false_goal = Clause(
+        (),
+        eq(
+            hoare(
+                aeq(x_id, zero),
+                while_cmd(bconst(false), assign(x_id, aconst(succ(zero)))),
+                aeq(x_id, zero),
+                initial_state,
+            ),
+            true,
+        ),
+        (),
+    )
+
+    session = ProofSession(while_false_goal, engine)
+    session.activate_scope("imp_def")
+
+    session.rewrite_first("hoare_semantics")
+    session.rewrite_first("holds_aeq")
+    session.simp()
+    theorem_12_ok = session.qed()
+    print(f"Proved: {theorem_12_ok}\n")
+
+    print("\n=== Theorem 13: Hoare proof of while-loop with iteration ===")
+    print("{x=0} while x<1 do x:=x+1 {x=1}")
+    print("Manual proof using ProofSession:\n")
+
+    one = succ(zero)
+    initial_state = put(empty, x_id, zero)
+    while_one_goal = Clause(
+        (),
+        eq(
+            hoare(
+                aeq(x_id, zero),
+                while_cmd(
+                    blt(avar(x_id), aconst(one)),
+                    assign(x_id, aadd(avar(x_id), aconst(one))),
+                ),
+                aeq(x_id, one),
+                initial_state,
+            ),
+            true,
+        ),
+        (),
+    )
+
+    session = ProofSession(while_one_goal, engine)
+    session.activate_scope("imp_def")
+
+    session.rewrite_first("hoare_semantics")
+    session.rewrite_first("holds_aeq")
+    session.simp()
+    session.rewrite_first("exec_while")
+    session.simp()
+    session.rewrite_first("exec_while")
+    session.simp()
+    theorem_13_ok = session.qed()
+    print(f"Proved: {theorem_13_ok}\n")
+
+    if (
+        all(goals_ok)
+        and theorem_9_ok
+        and theorem_10_ok
+        and theorem_11_ok
+        and theorem_12_ok
+        and theorem_13_ok
+    ):
+        print("=== All theorems proved! ===")
     else:
-        print("\n=== Some theorems failed! ===")
+        print("=== Some theorems failed! ===")
 
 
 if __name__ == "__main__":

@@ -219,7 +219,54 @@ to see where rewriting got stuck.
 
 ---
 
-## 9. Common beginner mistakes
+## 9. Manual Hoare proofs with `ProofSession`
+
+The tutorial example also shows the same Hoare theorem proved step by step with
+`ProofSession`. This is useful when you want to see each rewrite explicitly
+instead of letting `prove_with_trace(...)` do everything at once.
+
+Start by creating a session and activating the Hoare theory scope:
+
+```python
+session = ProofSession(theorem_10_goal, engine)
+session.activate_scope("imp_def")
+```
+
+Then rewrite the Hoare judgment into its semantic form:
+
+```python
+session.rewrite_first("hoare_semantics")
+session.rewrite_first("holds_aeq")
+session.simp()
+```
+
+For the sequence-and-conditional example, that is enough to discharge the
+goal:
+
+```python
+theorem_10_ok = session.qed()
+```
+
+The same pattern works for the other manual proofs in the script:
+
+```python
+session = ProofSession(while_blt_goal, engine)
+session.activate_scope("imp_def")
+session.rewrite_first("exec_while")
+session.simp()
+session.qed()
+```
+
+For the one-step while-loop example, you rewrite `exec_while`, simplify the
+result, then repeat the same rewrite/simplify cycle until the loop condition
+reduces to `false`.
+
+The key idea is that manual proofs follow the same semantic rules as the
+automated proof, but you control the order of rewriting and simplification.
+
+---
+
+## 10. Common beginner mistakes
 
 1. Missing sort signature for a new symbol.
 2. Using inconsistent variable sorts.
@@ -228,7 +275,7 @@ to see where rewriting got stuck.
 
 ---
 
-## 10. Suggested next exercises
+## 11. Suggested next exercises
 
 1. Change the postcondition to `x=3` and confirm the theorem fails.
 2. Replace the conditional with `if x<1 then ... else ...` and update the proof.
@@ -237,7 +284,7 @@ to see where rewriting got stuck.
 
 ---
 
-## 11. Run the tutorial example
+## 12. Run the tutorial example
 
 ```bash
 .venv/bin/python examples/prove_hoare_while.py

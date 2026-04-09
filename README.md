@@ -1,6 +1,6 @@
 # Fiddlehead
 
-Fiddlehead is a small theorem prover written in Python.
+Fiddlehead is a theorem prover and proof assistant written in Python.
 
 I started it as a learning project because I wanted to understand, from the inside, how systems like ACL2 and Z3 work. Over time it grew into something more capable than a toy, but I have tried to keep the core ideas visible so the codebase stays useful for learning.
 
@@ -83,6 +83,35 @@ ok, trace = prove_with_trace(
 )
 assert ok
 print(render_proof_trace(trace))
+```
+
+Here is a small manual proof of `append(xs, nil) = xs` using `ProofSession`:
+
+```python
+from fiddlehead import *
+
+reset_var_interner()
+
+xs = V("xs", "List")
+nil = Const("nil")
+append = lambda a, b: App("append", a, b)
+eq = lambda a, b: App("eq", a, b)
+
+engine = make_engine(rules=builtin_rules())
+install_theory(engine, nat_theory(), activate_scopes=True)
+install_theory(engine, list_theory(), activate_scopes=True)
+
+goal = Clause((), eq(append(xs, nil), xs))
+session = ProofSession(goal, engine)
+
+session.induct(xs)
+session.rewrite_first("theory.core.list.0")
+session.exact()
+session.rewrite_first("theory.core.list.1")
+session.rewrite_first("IH.0")
+session.exact()
+
+assert session.qed()
 ```
 
 Example proof tree output:

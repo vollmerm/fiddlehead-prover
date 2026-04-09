@@ -169,6 +169,21 @@ def test_normalize_reaches_fixpoint_across_child_rewrites(env) -> None:  # type:
     assert normalize(term, engine) == zero
 
 
+def test_ground_cache_not_reused_across_contexts() -> None:
+    reset_var_interner()
+    engine = make_engine(rules=builtin_rules())
+    install_theory(engine, nat_theory(), activate_scopes=True)
+
+    zero = Const("0")
+    succ = lambda t: App("S", t)
+    goal = App("eq", zero, succ(zero))
+
+    contextual = Context(ground_equalities=((zero, succ(zero)),))
+    assert engine.normalize_under_context(goal, contextual) == true
+    assert goal not in engine.ground_cache
+    assert engine.normalize(goal) != true
+
+
 def test_disequality_simplification_and_split_branch_contexts(env) -> None:  # type: ignore
     x = env["x"]
     y = env["y"]

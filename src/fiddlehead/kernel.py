@@ -622,6 +622,12 @@ class Engine:
 
         original = term
         original_is_ground = is_ground(original)
+        context_free = not (
+            self.ctx.substitutions
+            or self.ctx.ground_equalities
+            or self.ctx.rewrite_equalities
+            or self.ctx.disequalities
+        )
         self._ensure_eq_classes(term)
 
         for _ in range(self.fuel):
@@ -629,7 +635,7 @@ class Engine:
             # only valid within one layer. Clearing avoids reusing stale
             # intermediate forms across normalize iterations.
             self.memo = {}
-            if is_ground(term) and term in self.ground_cache:
+            if context_free and is_ground(term) and term in self.ground_cache:
                 cached = self.ground_cache[term]
                 if original_is_ground:
                     self.ground_cache[original] = cached
@@ -640,9 +646,9 @@ class Engine:
                 break
             term = rewritten
 
-        if original_is_ground:
+        if context_free and original_is_ground:
             self.ground_cache[original] = term
-        if is_ground(term):
+        if context_free and is_ground(term):
             self.ground_cache[term] = term
         return term
 

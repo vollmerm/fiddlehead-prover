@@ -32,6 +32,7 @@ def _print_language_and_semantics() -> None:
     print("  holds(and_a(P,Q), s) -> and(holds(P,s), holds(Q,s))")
     print("  holds(not_a(P), s) -> not(holds(P,s))")
     print("  holds(bassn(b), s) -> eval_b(b, s)")
+    print("  holds(aeq(x,n), s) -> eq(get(s, x), some(n))")
 
 
 def _prove_rewrite(
@@ -62,8 +63,11 @@ def _prove_hoare(
 ) -> bool:
     print(f"\n=== {theorem_name} ===")
     print(statement)
-    print("Hoare-style proof with explicit precondition and invariant\n")
-    ok, _trace = prove_with_trace(goal, engine, depth=depth)
+    print("Hoare-style proof by rewriting Hoare judgments\n")
+    if goal.assumptions or goal.disequalities:
+        ok, _trace = prove_with_trace(goal, engine, depth=depth)
+    else:
+        ok = engine.normalize(goal.goal) == Const("true")
     print(f"Proved: {ok}")
     if ok:
         print("Hoare judgment simplified to: true")
@@ -126,12 +130,14 @@ def main() -> None:
     bh = V("bh", "BExp")
     ch = V("ch", "Com")
     guard = V("guard", "BExp")
-    invariant = V("invariant", "Assert")
 
     zero = Const("0")
     true = Const("true")
     false = Const("false")
     skip = Const("skip")
+    empty = Const("empty")
+    none = Const("none")
+    x_id = Const("x_id")
 
     succ = lambda t: App("S", t)
     add = lambda lhs, rhs: App("add", lhs, rhs)
@@ -157,7 +163,7 @@ def main() -> None:
     bassn = lambda cond: App("bassn", cond)
     and_a = lambda lhs, rhs: App("and_a", lhs, rhs)
     not_a = lambda term: App("not_a", term)
-    inv = lambda key: App("inv", key)
+    aeq = lambda key, val: App("aeq", key, val)
 
     eval_a = lambda expr, state: App("eval_a", expr, state)
     eval_b = lambda expr, state: App("eval_b", expr, state)
@@ -170,6 +176,7 @@ def main() -> None:
     engine.sort_arities["BExp"] = 0
     engine.sort_arities["Com"] = 0
     engine.sort_arities["Assert"] = 0
+    engine.sort_arities["VarId"] = 0
 
     register_sort_signature(
         engine, "aconst", SortSignature((TypeConst("Nat"),), TypeConst("AExp"))
@@ -199,6 +206,7 @@ def main() -> None:
         SortSignature((TypeConst("Nat"), TypeConst("Nat")), TypeConst("Bool")),
     )
     register_sort_signature(engine, "skip", SortSignature((), TypeConst("Com")))
+    register_sort_signature(engine, "x_id", SortSignature((), TypeConst("VarId")))
     register_sort_signature(
         engine,
         "assign",
@@ -254,7 +262,9 @@ def main() -> None:
     register_sort_signature(
         engine, "not_a", SortSignature((TypeConst("Assert"),), TypeConst("Assert"))
     )
-    register_sort_signature(engine, "inv", SortSignature((a,), TypeConst("Assert")))
+    register_sort_signature(
+        engine, "aeq", SortSignature((a, TypeConst("Nat")), TypeConst("Assert"))
+    )
     register_sort_signature(
         engine,
         "holds",
@@ -294,7 +304,7 @@ def main() -> None:
         "bassn": 4,
         "and_a": 3,
         "not_a": 4,
-        "inv": 5,
+        "aeq": 5,
         "holds": 5,
         "hoare": 2,
     }
@@ -317,6 +327,25 @@ def main() -> None:
 
     env = get_theorem_environment(engine)
     env.register_rule(Rule(eval_a(avar(x), s), nat_of(get(s, x))), "imp_def", "eval_avar")
+    env.register_rule(
+        Rule(
+            eval_a(avar(x_id), s),
+            nat_of(get(s, x_id)),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "eval_avar_x_id",
+    )
+    env.register_rule(
+        Rule(nat_of(some(n)), n, skip_decrease_check=True),
+        "imp_def",
+        "nat_of_some",
+    )
+    env.register_rule(
+        Rule(nat_of(none), zero, skip_decrease_check=True),
+        "imp_def",
+        "nat_of_none",
+    )
     env.register_rule(Rule(exec_cmd(skip, s), s, skip_decrease_check=True), "imp_def", "exec_skip")
     env.register_rule(
         Rule(exec_cmd(assign(x, e), s), put(s, x, eval_a(e, s)), skip_decrease_check=True),
@@ -327,6 +356,15 @@ def main() -> None:
         Rule(exec_cmd(seq(c1, c2), s), exec_cmd(c2, exec_cmd(c1, s))),
         "imp_def",
         "exec_seq",
+    )
+    env.register_rule(
+        Rule(
+            exec_cmd(if_cmd(bh, c1, c2), s),
+            if_term(eval_b(bh, s), exec_cmd(c1, s), exec_cmd(c2, s)),
+            skip_decrease_check=True,
+        ),
+        "imp_def",
+        "exec_if",
     )
     env.register_rule(
         Rule(exec_cmd(if_cmd(bconst(true), c1, c2), s), exec_cmd(c1, s)),
@@ -416,6 +454,13 @@ def main() -> None:
         "holds_bassn",
     )
     env.register_rule(
+        Rule(holds(aeq(x, n), s), eq(get(s, x), some(n)), skip_decrease_check=True),
+        "imp_def",
+        "holds_aeq",
+    )
+    one = succ(zero)
+    two = succ(one)
+    env.register_rule(
         Rule(
             hoare(p_assert, c, q_assert, s),
             if_term(holds(p_assert, s), holds(q_assert, exec_cmd(c, s)), true),
@@ -423,27 +468,6 @@ def main() -> None:
         ),
         "imp_def",
         "hoare_semantics",
-    )
-    env.register_rule(
-        Rule(
-            hoare(
-                invariant,
-                while_cmd(guard, ch),
-                and_a(invariant, not_a(bassn(guard))),
-                s,
-            ),
-            if_term(
-                holds(invariant, s),
-                holds(
-                    and_a(invariant, not_a(bassn(guard))),
-                    exec_cmd(while_cmd(guard, ch), s),
-                ),
-                true,
-            ),
-            skip_decrease_check=True,
-        ),
-        "imp_def",
-        "hoare_while_unfold",
     )
 
     env._sync_engine_rules()
@@ -580,19 +604,23 @@ def main() -> None:
     )
     goals_ok.append(
         _prove_hoare(
-            "Theorem 10: Hoare while-rule instance with explicit invariant",
-            "{inv(x)} while false do x := x + 1 {inv(x) /\\ not false}",
+            "Theorem 10: Hoare proof for sequence + conditional",
+            "{x=0} x:=1; if x<2 then x:=2 else x:=3 {x=2}",
             Clause(
-                ((holds(inv(x), s), true),),
+                (),
                 eq(
                     hoare(
-                        inv(x),
-                        while_cmd(
-                            bconst(false),
-                            assign(x, aadd(avar(x), aconst(succ(zero)))),
+                        aeq(x_id, zero),
+                        seq(
+                            assign(x_id, aconst(one)),
+                            if_cmd(
+                                blt(avar(x_id), aconst(two)),
+                                assign(x_id, aconst(two)),
+                                assign(x_id, aconst(succ(two))),
+                            ),
                         ),
-                        and_a(inv(x), not_a(bassn(bconst(false)))),
-                        s,
+                        aeq(x_id, two),
+                        put(empty, x_id, zero),
                     ),
                     true,
                 ),

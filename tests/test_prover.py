@@ -591,6 +591,19 @@ def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
     scoped_list = get_induction_scheme(scoped_engine, "list")
     assert scoped_list is not None
 
+    register_sort_signature(
+        scoped_engine, "id_nat", SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
+    )
+    auto_rule_name = scoped_theory.register_rule(
+        Rule(App("id_nat", x), x),
+        scope="auto_scope",
+    )
+    assert auto_rule_name.startswith("auto_scope.")
+    auto_rule_session = ProofSession(Clause((), App("id_nat", zero)), scoped_engine)
+    auto_rule_session.rewrite_by_name(auto_rule_name)
+    assert auto_rule_session.current_goal() is not None
+    assert auto_rule_session.current_goal().goal == zero
+
     scoped_clause = Clause((), eq(app(xs, nil), xs))
     ok_scoped_cert, scoped_cert = prove_checked(
         scoped_clause,

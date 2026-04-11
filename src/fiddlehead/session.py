@@ -41,6 +41,86 @@ class ProofSession:
         self._ih_rules: Dict[str, Rule] = {}
         self._sync_ih_rules()
 
+    def _format_clause(self, clause: Optional[Clause] = None) -> str:
+        """Render a clause in a compact, REPL-friendly form."""
+
+        current = self.current_goal() if clause is None else clause
+        if current is None:
+            return "<no goals>"
+
+        lines: list[str] = [f"goal: {current.goal}"]
+        if current.assumptions:
+            lines.append("assumptions:")
+            for index, (lhs, rhs) in enumerate(current.assumptions):
+                lines.append(f"  {index}. {lhs} = {rhs}")
+        else:
+            lines.append("assumptions: <none>")
+        if current.disequalities:
+            lines.append("disequalities:")
+            for index, (lhs, rhs) in enumerate(current.disequalities):
+                lines.append(f"  {index}. {lhs} != {rhs}")
+        else:
+            lines.append("disequalities: <none>")
+        return "\n".join(lines)
+
+    def format_goal(self, clause: Optional[Clause] = None) -> str:
+        """Public wrapper for rendering a goal or arbitrary clause."""
+
+        return self._format_clause(clause)
+
+    def format_rules(self, pattern: Optional[str] = None) -> str:
+        """Render named rules in a readable list for REPL use."""
+
+        named = self.theory.list_named_rules(pattern)
+        if not named:
+            return "<no named rules>"
+        lines: list[str] = []
+        for name, (rule, source) in named.items():
+            lines.append(f"- {name} [{source.name.lower()}]: {rule.lhs} -> {rule.rhs}")
+        return "\n".join(lines)
+
+    def format_ihs(self) -> str:
+        """Render available induction hypotheses in a readable list."""
+
+        if not self._ih_rules:
+            return "<no induction hypotheses>"
+        lines: list[str] = []
+        for name, rule in self._ih_rules.items():
+            lines.append(f"- {name}: {rule.lhs} -> {rule.rhs}")
+        return "\n".join(lines)
+
+    def _available_named_rules(self) -> str:
+        names = list(self.theory.list_named_rules().keys())
+        if not names:
+            return "<none>"
+        preview = ", ".join(names[:8])
+        if len(names) > 8:
+            preview += ", ..."
+        return preview
+
+    def _available_ihs(self) -> str:
+        if not self._ih_rules:
+            return "<none>"
+        names = list(self._ih_rules.keys())
+        preview = ", ".join(names[:8])
+        if len(names) > 8:
+            preview += ", ..."
+        return preview
+
+    def _tactic_error(self, tactic: str, error: Exception) -> ValueError:
+        """Attach the active goal and useful rewrite context to an error."""
+
+        return ValueError(
+            "\n".join(
+                [
+                    f"{tactic} failed: {error}",
+                    self._format_clause(),
+                    f"available IHs: {self._available_ihs()}",
+                    f"named rules: {self._available_named_rules()}",
+                ]
+            )
+        )
+
     def _record(
         self,
         kind: str,
@@ -125,7 +205,12 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        simplified, stage_data = simplify_clause_with_stages(original, self.engine)
+        try:
+            simplified, stage_data = simplify_clause_with_stages(
+                original, self.engine
+            )
+        except ValueError as exc:
+            raise self._tactic_error("simp", exc) from exc
         stage_nodes = [
             _new_node(f"stage-{name}", clause) for name, clause in stage_data
         ]
@@ -155,7 +240,10 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        branches = _check_split_step(original)
+        try:
+            branches = _check_split_step(original)
+        except ValueError as exc:
+            raise self._tactic_error("split", exc) from exc
         kids = [
             _new_node("session-branch", branch, note=f"index={index}")
             for index, branch in enumerate(branches)
@@ -176,10 +264,13 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        chosen = _select_induction_scheme(
-            self.engine, var, scheme=scheme, scheme_name=scheme_name
-        )
-        branches = _check_induction_step(original, var, chosen, self.engine)
+        try:
+            chosen = _select_induction_scheme(
+                self.engine, var, scheme=scheme, scheme_name=scheme_name
+            )
+            branches = _check_induction_step(original, var, chosen, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error("induct", exc) from exc
         kids = [
             _new_node("induction-branch", branch, note=f"index={index}")
             for index, branch in enumerate(branches)
@@ -212,20 +303,23 @@ class ProofSession:
         original = self.goals[0]
         pending = [original]
         plan: list[tuple[str, str]] = []
-        for index, var in enumerate(vars):
-            chosen = _select_induction_scheme(
-                self.engine,
-                var,
-                scheme=schemes[index] if schemes is not None else None,
-                scheme_name=scheme_names[index] if scheme_names is not None else None,
-            )
-            plan.append((var.name, chosen.name))
-            next_pending: list[Clause] = []
-            for clause in pending:
-                next_pending.extend(
-                    _check_induction_step(clause, var, chosen, self.engine)
+        try:
+            for index, var in enumerate(vars):
+                chosen = _select_induction_scheme(
+                    self.engine,
+                    var,
+                    scheme=schemes[index] if schemes is not None else None,
+                    scheme_name=scheme_names[index] if scheme_names is not None else None,
                 )
-            pending = next_pending
+                plan.append((var.name, chosen.name))
+                next_pending: list[Clause] = []
+                for clause in pending:
+                    next_pending.extend(
+                        _check_induction_step(clause, var, chosen, self.engine)
+                    )
+                pending = next_pending
+        except ValueError as exc:
+            raise self._tactic_error("induct_many", exc) from exc
 
         kids = [
             _new_node("induction-branch", branch, note=f"index={index}")
@@ -248,9 +342,12 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        auto_var = choose_induction_var(original, self.engine)
-        scheme = _select_induction_scheme(self.engine, auto_var)
-        branches = _check_induction_step(original, auto_var, scheme, self.engine)
+        try:
+            auto_var = choose_induction_var(original, self.engine)
+            scheme = _select_induction_scheme(self.engine, auto_var)
+            branches = _check_induction_step(original, auto_var, scheme, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error("auto_induct", exc) from exc
         kids = [
             _new_node("induction-branch", branch, note=f"index={index}")
             for index, branch in enumerate(branches)
@@ -281,7 +378,10 @@ class ProofSession:
         if name in self._ih_rules:
             rule = self._ih_rules[name]
             original = self.goals[0]
-            rewritten = _check_rewrite_step(original, rule, self.engine)
+            try:
+                rewritten = _check_rewrite_step(original, rule, self.engine)
+            except ValueError as exc:
+                raise self._tactic_error(f"rewrite_by_name({name})", exc) from exc
             self._record(
                 "session-rewrite-by-name",
                 original,
@@ -293,12 +393,19 @@ class ProofSession:
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
-            raise ValueError(f"Unknown named rule: {name}")
+            raise ValueError(
+                f"Unknown named rule: {name}\n"
+                f"available IHs: {self._available_ihs()}\n"
+                f"named rules: {self._available_named_rules()}"
+            )
 
         rule, source = entry
         original = self.goals[0]
         user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
-        rewritten = _check_rewrite_step(original, user_rule, self.engine)
+        try:
+            rewritten = _check_rewrite_step(original, user_rule, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error(f"rewrite_by_name({name})", exc) from exc
         self._record(
             "session-rewrite-by-name",
             original,
@@ -320,10 +427,14 @@ class ProofSession:
         if not self.theory.is_theory_rule(rule):
             raise ValueError(
                 "Cannot apply arbitrary rewrite. Use rewrite_by_name() "
-                "with a rule from the theory (definitions, lemmas, or installed theories)."
+                "with a rule from the theory (definitions, lemmas, or installed theories).\n"
+                f"{self._format_clause()}"
             )
         original = self.goals[0]
-        rewritten = _check_rewrite_step(original, rule, self.engine)
+        try:
+            rewritten = _check_rewrite_step(original, rule, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error("rewrite", exc) from exc
         self._record(
             "session-rewrite",
             original,
@@ -352,7 +463,10 @@ class ProofSession:
         if name in self._ih_rules:
             rule = self._ih_rules[name]
             original = self.goals[0]
-            rewritten = _check_rewrite_first_step(original, rule, self.engine)
+            try:
+                rewritten = _check_rewrite_first_step(original, rule, self.engine)
+            except ValueError as exc:
+                raise self._tactic_error(f"rewrite_first({name})", exc) from exc
             self._record(
                 "session-rewrite-first",
                 original,
@@ -364,12 +478,19 @@ class ProofSession:
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
-            raise ValueError(f"Unknown named rule: {name}")
+            raise ValueError(
+                f"Unknown named rule: {name}\n"
+                f"available IHs: {self._available_ihs()}\n"
+                f"named rules: {self._available_named_rules()}"
+            )
 
         rule, source = entry
         original = self.goals[0]
         user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
-        rewritten = _check_rewrite_first_step(original, user_rule, self.engine)
+        try:
+            rewritten = _check_rewrite_first_step(original, user_rule, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error(f"rewrite_first({name})", exc) from exc
         self._record(
             "session-rewrite-first",
             original,
@@ -398,7 +519,10 @@ class ProofSession:
         if name in self._ih_rules:
             rule = self._ih_rules[name]
             original = self.goals[0]
-            rewritten = _check_rewrite_many_step(original, rule, self.engine)
+            try:
+                rewritten = _check_rewrite_many_step(original, rule, self.engine)
+            except ValueError as exc:
+                raise self._tactic_error(f"rewrite_many({name})", exc) from exc
             self._record(
                 "session-rewrite-many",
                 original,
@@ -410,12 +534,19 @@ class ProofSession:
 
         entry = self.theory.get_named_rule_info(name)
         if entry is None:
-            raise ValueError(f"Unknown named rule: {name}")
+            raise ValueError(
+                f"Unknown named rule: {name}\n"
+                f"available IHs: {self._available_ihs()}\n"
+                f"named rules: {self._available_named_rules()}"
+            )
 
         rule, source = entry
         original = self.goals[0]
         user_rule = Rule(rule.lhs, rule.rhs, rule.conditions, skip_decrease_check=True)
-        rewritten = _check_rewrite_many_step(original, user_rule, self.engine)
+        try:
+            rewritten = _check_rewrite_many_step(original, user_rule, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error(f"rewrite_many({name})", exc) from exc
         self._record(
             "session-rewrite-many",
             original,
@@ -452,7 +583,10 @@ class ProofSession:
         if not self.goals:
             raise ValueError("No goals left.")
         original = self.goals[0]
-        solved = _check_exact_step(original, self.engine)
+        try:
+            solved = _check_exact_step(original, self.engine)
+        except ValueError as exc:
+            raise self._tactic_error("exact", exc) from exc
         self._record(
             "session-exact", original, solved=True, children=[_new_node("goal", solved)]
         )
@@ -559,3 +693,16 @@ class ProofSession:
         current = self.current_goal() or Clause((), true, ())
         self._record("session-qed", current, solved=done)
         return done
+
+    def describe(self) -> str:
+        """Return a human-friendly summary of the session state."""
+
+        return (
+            f"goals: {len(self.goals)}\n"
+            f"{self._format_clause()}\n"
+            f"available IHs: {self._available_ihs()}\n"
+            f"named rules: {self._available_named_rules()}"
+        )
+
+    def __str__(self) -> str:
+        return self.describe()

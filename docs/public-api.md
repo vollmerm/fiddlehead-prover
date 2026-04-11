@@ -190,6 +190,23 @@ assert prove_with_induction(goal, engine, x, nat_scheme, depth=8, induction_dept
 This is the most direct induction API when you already know which variable and
 scheme you want to use.
 
+## Interactive proof sessions
+
+`ProofSession` is the REPL-oriented wrapper around the same proof machinery. It
+keeps track of the active goal and available induction hypotheses, and it now
+includes small formatting helpers for interactive use:
+
+```python
+session = ProofSession(goal, engine)
+print(session.describe())
+print(session.format_goal())
+print(session.format_rules("*core.nat*"))
+print(session.format_ihs())
+```
+
+Rule registration also auto-generates a usable name when `name=` is omitted,
+which makes anonymous REPL registrations available to `rewrite_by_name(...)`.
+
 ## Worked example: natural-number proof
 
 This follows the same basic arithmetic pattern as `README.md` and

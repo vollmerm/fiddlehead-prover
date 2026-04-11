@@ -682,6 +682,34 @@ class TheoremEnvironment:
         self.scoped_rule_sets: Dict[str, list[Rule]] = {}
         self.active_scopes: set[str] = set()
 
+    def _sanitize_rule_name(self, text: str) -> str:
+        pieces: list[str] = []
+        for char in text.strip():
+            if char.isalnum() or char in "._-":
+                pieces.append(char)
+            else:
+                pieces.append("-")
+        cleaned = "".join(pieces).strip("._-")
+        return cleaned or "rule"
+
+    def _rule_head_symbol(self, rule: Rule) -> str:
+        match rule.lhs:
+            case Fun(symbol, _):
+                return symbol
+            case Var():
+                return "rule"
+
+    def _auto_rule_name(self, rule: Rule, scope: str, label: str) -> str:
+        base = self._sanitize_rule_name(label)
+        if base == "theory-rule" or base == "rule":
+            base = self._sanitize_rule_name(self._rule_head_symbol(rule))
+        candidate = f"{self._sanitize_rule_name(scope)}.{base}"
+        suffix = 1
+        while candidate in self.named_rules:
+            suffix += 1
+            candidate = f"{self._sanitize_rule_name(scope)}.{base}.{suffix}"
+        return candidate
+
     def _sync_engine_rules(self) -> None:
         # Rebuild active rules from base + active scopes to keep engine/index coherent.
         active_rules = list(self.base_rules)
@@ -777,13 +805,14 @@ class TheoremEnvironment:
         scope: str = "theories",
         label: str = "theory rule",
         name: Optional[str] = None,
-    ) -> None:
+    ) -> str:
         """Validate and register a rule into a scope."""
 
         _validate_rule_sorts(rule, self.engine, label)
-        if name is not None:
-            self.named_rules[name] = (rule, RuleSource.THEORY)
+        final_name = name or self._auto_rule_name(rule, scope, label)
+        self.named_rules[final_name] = (rule, RuleSource.THEORY)
         self._add_rule_to_scope(scope, rule)
+        return final_name
 
     def register_definition(
         self,

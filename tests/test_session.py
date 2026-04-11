@@ -117,6 +117,42 @@ class TestProofSessionBasics:
         assert session.assumptions() == ()
 
 
+class TestSessionPrettyPrinting:
+    """Tests for REPL-friendly session formatting."""
+
+    def test_describe_includes_goal_context(self, session_env: dict) -> None:
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+        y = session_env["y"]
+        zero = session_env["zero"]
+
+        goal = Clause(((x, zero),), eq(x, y), ((y, zero),))
+        session = ProofSession(goal, engine)
+
+        text = session.describe()
+        assert "goals: 1" in text
+        assert "goal: eq(x, y)" in text
+        assert "assumptions:" in text
+        assert "0. x = 0" in text
+        assert "disequalities:" in text
+        assert "0. y != 0" in text
+        assert "named rules:" in text
+
+    def test_format_rules_and_ihs(self, session_env: dict) -> None:
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+
+        goal = Clause((), eq(x, x))
+        session = ProofSession(goal, engine)
+
+        rules = session.format_rules("*core.nat*")
+        assert "theory.core.nat" in rules
+        assert "->" in rules
+        assert session.format_ihs() == "<no induction hypotheses>"
+
+
 class TestSessionKeepAssumptions:
     """Tests for session.keep_assumptions()."""
 
@@ -314,6 +350,24 @@ class TestSessionEdgeCases:
 
         with pytest.raises(ValueError, match="No goals left"):
             session.exact()
+
+    def test_exact_error_includes_goal_context(self, session_env: dict) -> None:
+        """Should include the active goal in exact() failures."""
+        engine = session_env["engine"]
+        eq = session_env["eq"]
+        x = session_env["x"]
+        y = session_env["y"]
+
+        goal = Clause((), eq(x, y))
+        session = ProofSession(goal, engine)
+
+        with pytest.raises(ValueError) as excinfo:
+            session.exact()
+
+        message = str(excinfo.value)
+        assert "exact failed" in message
+        assert "goal: eq(x, y)" in message
+        assert "available IHs:" in message
 
 
 class TestNamedRewrites:

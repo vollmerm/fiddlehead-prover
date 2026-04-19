@@ -696,7 +696,7 @@ class TheoremEnvironment:
         match rule.lhs:
             case Fun(symbol, _):
                 return symbol
-            case Var():
+            case _:
                 return "rule"
 
     def _auto_rule_name(self, rule: Rule, scope: str, label: str) -> str:

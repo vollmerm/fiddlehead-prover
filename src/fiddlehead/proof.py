@@ -25,7 +25,12 @@ from .kernel import (
 from .syntax import App, Fun, Term, V, Var, apply_subst, false, true
 from .trace import ProofNode, ProofTrace, _new_node
 from .validation import _validate_clause_sorts, _validate_rule_sorts
-from .generalize import generalize_clause, ungeneralize_clause, GeneralizationMap
+from .generalize import (
+    GeneralizationMap,
+    destructor_elim_clause,
+    generalize_clause,
+    ungeneralize_clause,
+)
 from .select_induction import choose_induction_var
 
 
@@ -311,6 +316,70 @@ def clause_is_unsatisfiable(clause: Clause, engine: Engine) -> bool:
     return False
 
 
+def _term_contains(term: Term, sub: Term) -> bool:
+    """Return True if ``sub`` appears structurally anywhere inside ``term``."""
+    if term == sub:
+        return True
+    match term:
+        case Fun(_, args):
+            return any(_term_contains(arg, sub) for arg in args)
+        case _:
+            return False
+
+
+def _subst_term(term: Term, from_term: Term, to_term: Term) -> Term:
+    """Replace every structural occurrence of ``from_term`` in ``term`` with ``to_term``."""
+    if term == from_term:
+        return to_term
+    match term:
+        case Var():
+            return term
+        case Fun(symbol, args):
+            new_args = tuple(_subst_term(arg, from_term, to_term) for arg in args)
+            if new_args == args:
+                return term
+            return Fun(symbol, new_args)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
+
+
+def fertilize_clause(clause: Clause, engine: Engine) -> Optional[Clause]:
+    """Apply fertilization: substitute a hypothesis equality structurally into the goal.
+
+    For each assumption ``eq(lhs, rhs)``, try replacing every occurrence of
+    ``lhs`` with ``rhs`` in the goal (forward), and every occurrence of ``rhs``
+    with ``lhs`` (backward).  Returns the first simplified clause where the
+    goal changed, or ``None`` if fertilization did not help.
+
+    This complements ``_schematic_rules``-based rewriting, which only orients
+    the rule one way and applies it through the normalizer.  Fertilization does
+    a one-shot whole-goal structural substitution and is therefore able to
+    resolve goals where the rule orientation is wrong or where simultaneous
+    replacement of multiple occurrences is needed.
+    """
+    if goal_equality(clause.goal) is None and clause.goal != true and clause.goal != false:
+        return None
+
+    for lhs, rhs in clause.assumptions:
+        if lhs == rhs:
+            continue
+        # Skip pure variable substitutions — already handled by simplification.
+        if isinstance(lhs, Var) or isinstance(rhs, Var):
+            continue
+        for from_term, to_term in ((lhs, rhs), (rhs, lhs)):
+            if not _term_contains(clause.goal, from_term):
+                continue
+            new_goal = _subst_term(clause.goal, from_term, to_term)
+            if new_goal == clause.goal:
+                continue
+            candidate = Clause(clause.assumptions, new_goal, clause.disequalities)
+            simplified = simplify_clause(candidate, engine)
+            if clause_solved(simplified):
+                return simplified
+            if simplified.goal != clause.goal:
+                return simplified
+    return None
+
+
 def split_clause(clause: Clause) -> list[Clause]:
     """Split ``if`` goals into branch obligations."""
 
@@ -391,6 +460,20 @@ def _prove_kernel_impl(
 
     branches = split_clause(simplified)
     if len(branches) == 1:
+        # Try fertilization before falling back to induction or failure.
+        fertilized = fertilize_clause(simplified, engine)
+        if fertilized is not None and fertilized != simplified:
+            fert_node = _new_node("fertilize", fertilized)
+            if proof_node is not None:
+                proof_node.children.append(fert_node)
+            result = _prove_kernel_impl(
+                fertilized, engine, depth - 1, induction_handler, fert_node
+            )
+            if result:
+                if proof_node is not None:
+                    proof_node.solved = True
+                return True
+
         if induction_handler is not None:
             induced = induction_handler(simplified, depth, proof_node)
             if induced is not None:
@@ -436,6 +519,7 @@ def prove_with_induction(
     induction_depth: int = 1,
     proof_node: Optional[ProofNode] = None,
     generalize: bool = True,
+    destructor_elim: bool = True,
 ) -> bool:
     """Attempt proof with optional induction when plain recursion stalls.
 
@@ -447,9 +531,10 @@ def prove_with_induction(
         depth: Maximum proof search depth.
         induction_depth: Number of nested inductions allowed.
         proof_node: Optional proof tree node for tracing.
-        generalize: If True (default), attempt generalization before induction
-                   to make the goal more amenable to proof. If False, skip
-                   generalization.
+        generalize: If True (default), attempt generalization before induction.
+        destructor_elim: If True (default), attempt destructor elimination
+                        before induction to expose selector applications as
+                        plain variables.
 
     Returns:
         True if the proof succeeded, False otherwise.
@@ -461,13 +546,38 @@ def prove_with_induction(
             proof_node.note = f"sort mismatch for scheme {scheme.name}"
         return False
 
-    generalized_result: Optional[bool] = None
-    gen_map: Optional[GeneralizationMap] = None
+    if destructor_elim and induction_depth > 0:
+        de_result = destructor_elim_clause(clause, var, scheme, engine)
+        if de_result is not None:
+            if proof_node is not None:
+                de_node = _new_node(
+                    "destructor-elim",
+                    clause,
+                    note=f"var={var.name}, scheme={scheme.name}",
+                )
+                proof_node.children.append(de_node)
+                proof_node.solved = None
+            else:
+                de_node = None
+            de_ok = _prove_induction_on_clause(
+                de_result,
+                engine,
+                var,
+                scheme,
+                depth,
+                induction_depth,
+                de_node,
+                f"var={var.name}, scheme={scheme.name}, destructor-elim",
+            )
+            if de_ok:
+                if proof_node is not None:
+                    proof_node.solved = True
+                return True
 
     if generalize and induction_depth > 0:
         gen_result = generalize_clause(clause, engine, induction_var=var)
         if gen_result is not None:
-            generalized_clause, gen_map = gen_result
+            generalized_clause, _gen_map = gen_result
             if proof_node is not None:
                 gen_node = _new_node(
                     "generalize",
@@ -476,17 +586,21 @@ def prove_with_induction(
                 )
                 proof_node.children.append(gen_node)
                 proof_node.solved = None
-            generalized_result = _prove_induction_on_clause(
+            else:
+                gen_node = None
+            gen_ok = _prove_induction_on_clause(
                 generalized_clause,
                 engine,
                 var,
                 scheme,
                 depth,
                 induction_depth,
-                gen_node if proof_node is not None else None,
+                gen_node,
                 f"var={var.name}, scheme={scheme.name}, generalized",
             )
-            if generalized_result:
+            if gen_ok:
+                if proof_node is not None:
+                    proof_node.solved = True
                 return True
 
     return _prove_induction_on_clause(
@@ -545,6 +659,7 @@ def _prove_induction_on_clause(
                     next_induction,
                     child,
                     generalize=False,
+                    destructor_elim=False,
                 )
             )
         induction_node.solved = all(branch_results)

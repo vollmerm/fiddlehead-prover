@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Optional, Set, Tuple
 
-from .kernel import Engine
-from .syntax import Fun, Term, Var, apply_subst
+from .kernel import Engine, InductionScheme
+from .syntax import Fun, Term, V, Var, _VAR_NAME_SORT, apply_subst
 
 if TYPE_CHECKING:
     from .proof import Clause
@@ -282,6 +282,99 @@ def _contains_var(term: Term, var: Var) -> bool:
         case Fun(_, args):
             return any(_contains_var(arg, var) for arg in args)
     raise TypeError(f"Unsupported term type: {type(term)!r}")
+
+
+def destructor_elim_clause(
+    clause: "Clause",
+    var: Var,
+    scheme: "InductionScheme",
+    engine: Engine,
+) -> Optional["Clause"]:
+    """Eliminate destructor applications to the induction variable.
+
+    Finds all direct applications of non-constructor functions to ``var``
+    (i.e., terms of the form ``f(var, ...)`` or ``f(..., var, ...)``) that
+    appear in the clause, replaces each with a fresh variable, and adds
+    ``eq(fresh, original)`` assumptions.
+
+    This is analogous to ACL2's destructor elimination.  It makes induction
+    hypotheses more directly applicable by replacing opaque selector
+    expressions (``head(xs)``, ``tail(xs)``, ``length(xs)``, …) with plain
+    variables whose values are pinned by the new assumptions.
+
+    Returns the updated clause, or ``None`` if no eliminations were made.
+    """
+    from .proof import Clause, vars_in_clause
+
+    constructor_symbols: set[str] = {c.symbol for c in scheme.constructors}
+    base_symbols: set[str] = set()
+    for base in scheme.base_terms:
+        match base:
+            case Fun(sym, _):
+                base_symbols.add(sym)
+
+    # Collect all direct destructor-application terms.
+    destr_terms: list[Term] = []
+    seen: set[Term] = set()
+
+    def _collect(term: Term) -> None:
+        match term:
+            case Var():
+                return
+            case Fun(symbol, args):
+                if (
+                    symbol not in constructor_symbols
+                    and symbol not in base_symbols
+                    and any(arg == var for arg in args)
+                    and term not in seen
+                ):
+                    seen.add(term)
+                    destr_terms.append(term)
+                for arg in args:
+                    _collect(arg)
+
+    _collect(clause.goal)
+    for lhs, rhs in clause.assumptions:
+        _collect(lhs)
+        _collect(rhs)
+    for lhs, rhs in clause.disequalities:
+        _collect(lhs)
+        _collect(rhs)
+
+    if not destr_terms:
+        return None
+
+    used_names = vars_in_clause(clause)
+    term_to_var: Dict[Term, Var] = {}
+
+    for term in destr_terms:
+        sort = _infer_term_sort_unsafe(term, engine)
+        counter = 0
+        while f"d_{counter}" in used_names or f"d_{counter}" in _VAR_NAME_SORT:
+            counter += 1
+        name = f"d_{counter}"
+        used_names.add(name)
+        fresh = V(name, sort)
+        term_to_var[term] = fresh
+
+    new_goal = _replace_terms(clause.goal, term_to_var)
+    new_assumptions = tuple(
+        (_replace_terms(lhs, term_to_var), _replace_terms(rhs, term_to_var))
+        for lhs, rhs in clause.assumptions
+    )
+    new_equalities = tuple(
+        (fresh_v, term) for term, fresh_v in term_to_var.items()
+    )
+    new_disequalities = tuple(
+        (_replace_terms(lhs, term_to_var), _replace_terms(rhs, term_to_var))
+        for lhs, rhs in clause.disequalities
+    )
+
+    return Clause(
+        new_assumptions + new_equalities,
+        new_goal,
+        new_disequalities,
+    )
 
 
 def ungeneralize_term(term: Term, gen_map: GeneralizationMap) -> Term:

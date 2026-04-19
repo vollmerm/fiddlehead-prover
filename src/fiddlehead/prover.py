@@ -67,6 +67,7 @@ from .proof import (
     certificate_to_proof_trace,
     check_certificate,
     clause_solved,
+    fertilize_clause,
     induction_branches,
     prove,
     prove_checked,
@@ -76,6 +77,7 @@ from .proof import (
     prove_with_trace,
     simplify_clause,
 )
+from .generalize import destructor_elim_clause
 from .session import ProofSession
 from .syntax import App, Const, V, apply_subst, false, match, reset_var_interner, true
 from .trace import (

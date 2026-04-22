@@ -7,10 +7,10 @@ pick the best variable.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Set
 
 from .kernel import Engine, InductionScheme, get_induction_scheme_for_sort
-from .syntax import Fun, Term, Var
+from .syntax import Fun, Term, Var, contains_var
 
 if TYPE_CHECKING:
     from .proof import Clause
@@ -100,10 +100,6 @@ def _score_variable(var: Var, clause: Clause, engine: Engine) -> int:
     if _appears_in_measure_function(var, clause):
         score += 5
 
-    rec_calls = _get_recursive_calls(clause)
-    if _var_changes_in_recursive_call(var, rec_calls):
-        score += 12
-
     if _var_is_not_in_assumptions_only(var, clause):
         score += 3
 
@@ -112,86 +108,7 @@ def _score_variable(var: Var, clause: Clause, engine: Engine) -> int:
 
 def _appears_in_conclusion(var: Var, clause: Clause) -> bool:
     """Check if variable appears in the top-level conclusion (goal)."""
-    return _contains_var(clause.goal, var)
-
-
-def _contains_var(term: Term, var: Var) -> bool:
-    """Check if term contains variable var."""
-    match term:
-        case Var() as v:
-            return v.name == var.name
-        case Fun(_, args):
-            return any(_contains_var(arg, var) for arg in args)
-    return False
-
-
-_RECURSIVE_SYMBOLS: Set[str] = {
-    "add",
-    "mul",
-    "length",
-    "append",
-    "reverse",
-    "mirror",
-    "flatten",
-    "get",
-    "put",
-}
-
-
-def _get_recursive_calls(clause: Clause) -> list[Tuple[str, Tuple[Term, ...]]]:
-    """Get all recursive function applications in the clause."""
-    calls: list[Tuple[str, Tuple[Term, ...]]] = []
-    _collect_calls(clause.goal, calls)
-    for lhs, rhs in clause.assumptions:
-        _collect_calls(lhs, calls)
-        _collect_calls(rhs, calls)
-    for lhs, rhs in clause.disequalities:
-        _collect_calls(lhs, calls)
-        _collect_calls(rhs, calls)
-    return calls
-
-
-def _collect_calls(term: Term, result: list[Tuple[str, Tuple[Term, ...]]]) -> None:
-    """Collect function applications from a term."""
-    match term:
-        case Var():
-            return
-        case Fun(symbol, args):
-            if symbol in _RECURSIVE_SYMBOLS:
-                result.append((symbol, args))
-            for arg in args:
-                _collect_calls(arg, result)
-
-
-def _var_changes_in_recursive_call(
-    var: Var, rec_calls: list[Tuple[str, Tuple[Term, ...]]]
-) -> bool:
-    """Check if variable changes in a recursive call (i.e., appears in a recursive position)."""
-    for symbol, args in rec_calls:
-        if _var_at_recursive_pos(var, symbol, args):
-            return True
-    return False
-
-
-def _var_at_recursive_pos(var: Var, symbol: str, args: Tuple[Term, ...]) -> bool:
-    """Check if var appears at a recursive position for the given symbol."""
-    scheme = _get_scheme_for_symbol(symbol)
-    if scheme is None:
-        return False
-
-    for constructor in scheme.constructors:
-        if constructor.symbol == symbol:
-            for pos in constructor.recursive_positions:
-                if pos < len(args) and _contains_var(args[pos], var):
-                    return True
-    return False
-
-
-def _get_scheme_for_symbol(symbol: str) -> Optional["InductionScheme"]:
-    """Get the induction scheme associated with a recursive symbol."""
-    from .kernel import Engine
-
-    return None
+    return contains_var(clause.goal, var)
 
 
 _MEASURE_SYMBOLS: Set[str] = {"length", "size", "add", "depth", "count"}
@@ -210,7 +127,7 @@ def _appears_in_measure_function(var: Var, clause: Clause) -> bool:
 
     for call in calls:
         for arg in call.args:
-            if _contains_var(arg, var):
+            if contains_var(arg, var):
                 return True
     return False
 
@@ -228,20 +145,28 @@ def _collect_measure_calls(term: Term, result: list[Fun]) -> None:
 
 
 def _is_at_recursive_position(var: Var, clause: Clause, engine: Engine) -> bool:
-    """Check if variable appears at a recursive destructor position in the goal."""
+    """Check if variable appears at a recursive destructor position in the goal.
+
+    A variable scores higher when it appears as the principal argument to
+    a recursive function in the goal, as registered via scheme constructors.
+    """
     goal = clause.goal
     match goal:
         case Fun(symbol, args):
-            if _var_at_recursive_pos(var, symbol, args):
-                return True
+            for scheme in engine.schemes.values():
+                for constructor in scheme.constructors:
+                    if constructor.symbol == symbol:
+                        for pos in constructor.recursive_positions:
+                            if pos < len(args) and contains_var(args[pos], var):
+                                return True
     return False
 
 
 def _var_is_not_in_assumptions_only(var: Var, clause: Clause) -> bool:
     """Check if variable appears somewhere other than just assumptions."""
-    if _contains_var(clause.goal, var):
+    if contains_var(clause.goal, var):
         return True
     for lhs, rhs in clause.disequalities:
-        if _contains_var(lhs, var) or _contains_var(rhs, var):
+        if contains_var(lhs, var) or contains_var(rhs, var):
             return True
     return False

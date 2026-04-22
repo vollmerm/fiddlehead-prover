@@ -175,6 +175,17 @@ false = Const("false")
 Subst = Dict[Var, Term]
 
 
+def contains_var(term: Term, var: Var) -> bool:
+    """Return ``True`` when ``term`` contains ``var``."""
+
+    match term:
+        case Var() as v:
+            return v.name == var.name
+        case Fun(_, args):
+            return any(contains_var(arg, var) for arg in args)
+    raise TypeError(f"Unsupported term type: {type(term)!r}")
+
+
 def apply_subst(term: Term, subst: Subst) -> Term:
     """Apply a substitution to a term."""
 

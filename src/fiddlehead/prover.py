@@ -71,13 +71,22 @@ from .proof import (
     induction_branches,
     prove,
     prove_checked,
+    prove_checked_with_waterfall,
     prove_with_auto_induction,
     prove_with_induction,
     prove_with_registered_induction,
+    prove_with_waterfall,
+    prove_with_waterfall_trace,
     prove_with_trace,
     simplify_clause,
 )
 from .generalize import destructor_elim_clause
+from .rule_classes import (
+    RuleClass,
+    RuleClassSpec,
+    forward_chaining_rule_class,
+    rewrite_rule_class,
+)
 from .session import ProofSession
 from .syntax import App, Const, V, apply_subst, false, match, reset_var_interner, true
 from .trace import (
@@ -89,6 +98,7 @@ from .trace import (
 )
 from .theory import (
     Lemma,
+    NamedRuleInfo,
     RuleSource,
     TheoremEnvironment,
     Theory,
@@ -151,6 +161,8 @@ __all__ = [
     "prove_with_auto_induction",
     "prove_with_induction",
     "prove_with_registered_induction",
+    "prove_with_waterfall",
+    "prove_with_waterfall_trace",
     "simplify_clause",
     "clause_solved",
     "induction_branches",
@@ -162,8 +174,14 @@ __all__ = [
     "ProofCertificate",
     "certificate_to_proof_trace",
     "prove_checked",
+    "prove_checked_with_waterfall",
     "check_certificate",
     "Lemma",
+    "NamedRuleInfo",
+    "RuleClass",
+    "RuleClassSpec",
+    "rewrite_rule_class",
+    "forward_chaining_rule_class",
     "RuleSource",
     "Theory",
     "theory_from_module",

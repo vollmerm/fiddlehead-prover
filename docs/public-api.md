@@ -19,7 +19,7 @@ Most example scripts follow the same pattern:
 3. Create an engine with `make_engine(rules=builtin_rules())`.
 4. Install one or more theories with `install_theory(...)`.
 5. State a goal with `Clause(...)`.
-6. Prove it with `prove_with_trace(...)` or `prove_with_induction(...)`.
+6. Prove it with `prove(...)`, `prove_with_trace(...)`, or `prove_with_induction(...)`.
 
 That is enough for the natural-number and list proofs in `examples/`.
 
@@ -132,6 +132,11 @@ That means "prove the goal assuming `k2 != k1`."
 
 ## Core proof functions
 
+The automated prover now runs a waterfall-style search. In broad terms it
+simplifies the clause, splits `if(...)` branches, uses any active
+forward-chaining facts, tries goal-level transformations such as fertilization,
+and opens induction when you provide or select an induction target.
+
 ### `normalize(term, engine)`
 
 Rewrites a term to normal form using the engine's rules and installed theories.
@@ -149,9 +154,20 @@ before turning the term into a proof goal.
 Simplifies a clause under its local assumptions and disequalities. This is
 useful when a goal only reduces after you add local case information.
 
+### `prove(clause, engine, ...)`
+
+Attempts to prove a clause with the default waterfall search and returns a
+boolean.
+
+```python
+assert prove(Clause((), eq(zero, zero)), engine, depth=4)
+```
+
+Use this when you want the default automation but do not need a trace.
+
 ### `prove_with_trace(clause, engine, ...)`
 
-Runs proof search and returns `(ok, trace)`.
+Runs the same waterfall search and returns `(ok, trace)`.
 
 ```python
 ok, trace = prove_with_trace(goal, engine, depth=12)
@@ -159,6 +175,17 @@ ok, trace = prove_with_trace(goal, engine, depth=12)
 
 If induction is needed, pass `var=...`, `scheme=...`, and `induction_depth=...`
 the way the arithmetic and list examples do.
+
+### `render_waterfall_trace(trace)`
+
+Renders the trace in a stage-oriented view.
+
+```python
+print(render_waterfall_trace(trace))
+```
+
+This is especially useful when you want to see where the prover simplified,
+forward-chained, split branches, generalized, or introduced induction.
 
 ### `render_proof_trace(trace)`
 
@@ -189,6 +216,20 @@ assert prove_with_induction(goal, engine, x, nat_scheme, depth=8, induction_dept
 
 This is the most direct induction API when you already know which variable and
 scheme you want to use.
+
+### `prove_checked(clause, engine, ...)`
+
+Runs the same waterfall-backed search but returns a certificate as well.
+
+```python
+ok, cert = prove_checked(goal, engine, depth=8, var=x, scheme=nat_scheme)
+assert ok and cert is not None
+assert check_certificate(cert, engine, depth=8, induction_depth=1)
+```
+
+Certificate checking replays the same kind of proof steps that ordinary proof
+search uses, including forward chaining, fertilization, generalization,
+destructor elimination, branch splitting, and induction.
 
 ## Interactive proof sessions
 

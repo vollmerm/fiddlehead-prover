@@ -125,8 +125,7 @@ class Context:
     rewrite_equalities: Tuple[Tuple[Term, Term], ...] = ()
     disequalities: Tuple[Tuple[Term, Term], ...] = ()
 
-
-@dataclass(frozen=True)
+@dataclass
 class EngineConfig:
     """Normalization configuration: precedence plus AC operator sets."""
 
@@ -446,7 +445,7 @@ def tree_induction_scheme(
         name="tree",
         sort="Tree",
         base_terms=(Const(leaf_symbol),),
-        constructors=(InductionConstructor(node_symbol, 3, (0,)),),
+        constructors=(InductionConstructor(node_symbol, 3, (0, 2)),),
     )
 
 

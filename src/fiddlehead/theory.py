@@ -39,11 +39,18 @@ from .proof import (
     _check_exact_step,
     _check_induction_step,
     _check_rewrite_step,
-    _check_split_step,
     check_certificate,
     clause_solved,
     goal_equality,
     simplify_clause_with_stages,
+)
+from .rule_classes import (
+    RuleClass,
+    RuleClassInput,
+    RuleClassSpec,
+    has_rule_class,
+    normalize_rule_classes,
+    rewrite_rule_class,
 )
 from .syntax import App, Const, Fun, Term, V, Var, false, true
 from .validation import _validate_clause_sorts, _validate_rule_sorts
@@ -64,6 +71,15 @@ class Lemma:
     name: str
     clause: Clause
     certificate: ProofCertificate
+
+
+@dataclass(frozen=True)
+class NamedRuleInfo:
+    """Stored metadata for a named theorem-environment rule."""
+
+    rule: Rule
+    source: RuleSource
+    rule_classes: Tuple[RuleClassSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -527,6 +543,7 @@ def _clone_theorem_environment(
     cloned.recursive_definitions = dict(source.recursive_definitions)
     cloned.lemma_rewrites = dict(source.lemma_rewrites)
     cloned.named_rules = dict(source.named_rules)
+    cloned.lemma_rule_classes = dict(source.lemma_rule_classes)
     cloned.scoped_rule_sets = {
         scope: list(rules) for scope, rules in source.scoped_rule_sets.items()
     }
@@ -675,11 +692,12 @@ class TheoremEnvironment:
         self.engine = engine
         self.base_rules: list[Rule] = list(base_rules)
         self.lemmas: Dict[str, Lemma] = {}
+        self.lemma_rule_classes: Dict[str, Tuple[RuleClassSpec, ...]] = {}
         self.definitions: Dict[str, Rule] = {}
         self.recursive_definitions: Dict[str, Tuple[Rule, ...]] = {}
         self.lemma_rewrites: Dict[str, Rule] = {}
-        self.named_rules: Dict[str, Tuple[Rule, RuleSource]] = {}
-        self.scoped_rule_sets: Dict[str, list[Rule]] = {}
+        self.named_rules: Dict[str, NamedRuleInfo] = {}
+        self.scoped_rule_sets: Dict[str, list[str]] = {}
         self.active_scopes: set[str] = set()
 
     def _sanitize_rule_name(self, text: str) -> str:
@@ -713,13 +731,19 @@ class TheoremEnvironment:
     def _sync_engine_rules(self) -> None:
         # Rebuild active rules from base + active scopes to keep engine/index coherent.
         active_rules = list(self.base_rules)
-        for scope, rules in self.scoped_rule_sets.items():
-            if scope in self.active_scopes:
-                active_rules.extend(rules)
+        for scope, rule_names in self.scoped_rule_sets.items():
+            if scope not in self.active_scopes:
+                continue
+            for rule_name in rule_names:
+                entry = self.named_rules.get(rule_name)
+                if entry is None:
+                    continue
+                if has_rule_class(entry.rule_classes, RuleClass.REWRITE):
+                    active_rules.append(entry.rule)
         self.engine.reset_rules(active_rules)
 
-    def _add_rule_to_scope(self, scope: str, rule: Rule) -> None:
-        self.scoped_rule_sets.setdefault(scope, []).append(rule)
+    def _add_rule_to_scope(self, scope: str, rule_name: str) -> None:
+        self.scoped_rule_sets.setdefault(scope, []).append(rule_name)
         if scope in self.active_scopes:
             self._sync_engine_rules()
 
@@ -744,8 +768,8 @@ class TheoremEnvironment:
 
     def is_theory_rule(self, rule: Rule) -> bool:
         """Check if a rule originates from the theory (not arbitrary)."""
-        for r, _ in self.named_rules.values():
-            if r is rule:
+        for entry in self.named_rules.values():
+            if entry.rule is rule:
                 return True
         return False
 
@@ -754,26 +778,70 @@ class TheoremEnvironment:
         entry = self.named_rules.get(name)
         if entry is None:
             return None
-        return entry[0]
+        return entry.rule
+
+    def get_named_rule_entry(self, name: str) -> Optional[NamedRuleInfo]:
+        """Look up a named rule by name with full metadata."""
+
+        return self.named_rules.get(name)
 
     def get_named_rule_info(self, name: str) -> Optional[Tuple[Rule, RuleSource]]:
         """Look up a named rule by name with its source."""
-        return self.named_rules.get(name)
+        entry = self.named_rules.get(name)
+        if entry is None:
+            return None
+        return entry.rule, entry.source
+
+    def get_named_rule_classes(self, name: str) -> Tuple[RuleClassSpec, ...]:
+        """Return registered rule classes for a named rule."""
+
+        entry = self.named_rules.get(name)
+        if entry is None:
+            return ()
+        return entry.rule_classes
+
+    def get_lemma_rule_classes(self, name: str) -> Tuple[RuleClassSpec, ...]:
+        """Return registered rule classes for a lemma."""
+
+        return self.lemma_rule_classes.get(name, ())
+
+    def list_named_rule_entries(
+        self,
+        pattern: Optional[str] = None,
+        rule_class: Optional[RuleClass] = None,
+    ) -> Dict[str, NamedRuleInfo]:
+        """List named rules with full metadata, optionally filtered."""
+
+        out: Dict[str, NamedRuleInfo] = {}
+        for name, entry in self.named_rules.items():
+            if pattern is not None and not fnmatch(name, pattern):
+                continue
+            if rule_class is not None and not has_rule_class(
+                entry.rule_classes, rule_class
+            ):
+                continue
+            out[name] = entry
+        return out
 
     def list_named_rules(
-        self, pattern: Optional[str] = None
+        self,
+        pattern: Optional[str] = None,
+        rule_class: Optional[RuleClass] = None,
     ) -> Dict[str, Tuple[Rule, RuleSource]]:
         """List all named rules, optionally filtered by pattern."""
-        if pattern is None:
-            return dict(self.named_rules)
         return {
-            name: entry
-            for name, entry in self.named_rules.items()
-            if fnmatch(name, pattern)
+            name: (entry.rule, entry.source)
+            for name, entry in self.list_named_rule_entries(
+                pattern=pattern, rule_class=rule_class
+            ).items()
         }
 
     def register_lemma(
-        self, lemma: Lemma, depth: int = 12, induction_depth: int = 2
+        self,
+        lemma: Lemma,
+        depth: int = 12,
+        induction_depth: int = 2,
+        rule_classes: Optional[Tuple[RuleClassInput, ...]] = None,
     ) -> None:
         """Validate and store a proved lemma."""
 
@@ -798,6 +866,7 @@ class TheoremEnvironment:
         ):
             raise ValueError("Lemma certificate failed validation.")
         self.lemmas[lemma.name] = lemma
+        self.lemma_rule_classes[lemma.name] = normalize_rule_classes(rule_classes)
 
     def register_rule(
         self,
@@ -805,13 +874,20 @@ class TheoremEnvironment:
         scope: str = "theories",
         label: str = "theory rule",
         name: Optional[str] = None,
+        rule_classes: Optional[Tuple[RuleClassInput, ...]] = None,
     ) -> str:
         """Validate and register a rule into a scope."""
 
         _validate_rule_sorts(rule, self.engine, label)
         final_name = name or self._auto_rule_name(rule, scope, label)
-        self.named_rules[final_name] = (rule, RuleSource.THEORY)
-        self._add_rule_to_scope(scope, rule)
+        self.named_rules[final_name] = NamedRuleInfo(
+            rule=rule,
+            source=RuleSource.THEORY,
+            rule_classes=normalize_rule_classes(
+                rule_classes, default=(rewrite_rule_class(),)
+            ),
+        )
+        self._add_rule_to_scope(scope, final_name)
         return final_name
 
     def register_definition(
@@ -820,6 +896,7 @@ class TheoremEnvironment:
         lhs: Term,
         rhs: Term,
         scope: str = "definitions",
+        rule_classes: Optional[Tuple[RuleClassInput, ...]] = None,
     ) -> None:
         """Register a non-recursive definition as a scoped rewrite rule."""
 
@@ -838,8 +915,15 @@ class TheoremEnvironment:
         rule = Rule(lhs, rhs)
         _validate_rule_sorts(rule, self.engine, f"definition {name}")
         self.definitions[name] = rule
-        self.named_rules[f"def-{name}"] = (rule, RuleSource.DEFINITION)
-        self._add_rule_to_scope(scope, rule)
+        rule_name = f"def-{name}"
+        self.named_rules[rule_name] = NamedRuleInfo(
+            rule=rule,
+            source=RuleSource.DEFINITION,
+            rule_classes=normalize_rule_classes(
+                rule_classes, default=(rewrite_rule_class(),)
+            ),
+        )
+        self._add_rule_to_scope(scope, rule_name)
 
     def register_recursive_definition(
         self,
@@ -848,6 +932,7 @@ class TheoremEnvironment:
         scope: str = "definitions",
         signature: Optional[SortSignature] = None,
         precedence: Optional[int] = None,
+        rule_classes: Optional[Tuple[RuleClassInput, ...]] = None,
     ) -> Tuple[Rule, ...]:
         """Register recursive definition equations as scoped rewrite rules."""
 
@@ -900,9 +985,15 @@ class TheoremEnvironment:
             return existing
 
         self.recursive_definitions[name] = registered
+        classes = normalize_rule_classes(rule_classes, default=(rewrite_rule_class(),))
         for index, rule in enumerate(registered):
-            self.named_rules[f"def-{name}.{index}"] = (rule, RuleSource.DEFINITION)
-            self._add_rule_to_scope(scope, rule)
+            rule_name = f"def-{name}.{index}"
+            self.named_rules[rule_name] = NamedRuleInfo(
+                rule=rule,
+                source=RuleSource.DEFINITION,
+                rule_classes=classes,
+            )
+            self._add_rule_to_scope(scope, rule_name)
         return registered
 
     def register_lemma_rewrite(
@@ -910,6 +1001,7 @@ class TheoremEnvironment:
         lemma_name: str,
         scope: str = "lemmas",
         orientation: str = "auto",
+        rule_classes: Optional[Tuple[RuleClassInput, ...]] = None,
     ) -> Rule:
         """Orient and register a lemma equality as a rewrite rule."""
 
@@ -923,6 +1015,13 @@ class TheoremEnvironment:
         rule = _orient_equality_as_rewrite(self.engine.config, lhs, rhs, orientation)
         _validate_rule_sorts(rule, self.engine, f"lemma rewrite {lemma_name}")
         self.lemma_rewrites[lemma_name] = rule
-        self.named_rules[f"lemma-{lemma_name}"] = (rule, RuleSource.LEMMA)
-        self._add_rule_to_scope(scope, rule)
+        rule_name = f"lemma-{lemma_name}"
+        self.named_rules[rule_name] = NamedRuleInfo(
+            rule=rule,
+            source=RuleSource.LEMMA,
+            rule_classes=normalize_rule_classes(
+                rule_classes, default=(rewrite_rule_class(),)
+            ),
+        )
+        self._add_rule_to_scope(scope, rule_name)
         return rule

@@ -71,7 +71,7 @@ def render_proof_trace(trace: ProofTrace) -> str:
             status = " [failed]"
         note = f" :: {node.note}" if node.note else ""
         lines.append(f"{pad}- {node.kind}{status}{note} -> {node.clause.goal}")
-        for child in node.children or []:
+        for child in node.children:
             visit(child, indent + 1)
 
     for root in trace.roots:
@@ -82,13 +82,21 @@ def render_proof_trace(trace: ProofTrace) -> str:
 WATERFALL_STAGES: List[Tuple[str, Callable[[str], bool]]] = [
     ("init", lambda k: "init" in k),
     ("simplify", lambda k: "simplify" in k),
+    ("forward-chain", lambda k: "forward" in k and "chain" in k),
+    ("fertilize", lambda k: "fertilize" in k),
+    ("destructor-elim", lambda k: "destructor" in k),
+    ("generalize", lambda k: "generalize" in k),
+    ("auto-induct", lambda k: "auto-induction" in k),
     ("induct", lambda k: "induction" in k and "branch" not in k),
     ("branch", lambda k: "branch" in k),
+    ("prune", lambda k: "prune" in k),
     ("solve", lambda k: "solve" in k),
 ]
 
 
 def _get_stage(kind: str) -> str:
+    if kind.startswith("waterfall-"):
+        return kind.removeprefix("waterfall-")
     for stage, matcher in WATERFALL_STAGES:
         if matcher(kind.lower()):
             return stage
@@ -121,11 +129,11 @@ def render_waterfall_trace(trace: ProofTrace) -> str:
         else:
             lines.append(f"{pad}→ {node.kind}{status}{note} -> {goal_str}")
 
-        for child in node.children or []:
+        for child in node.children:
             visit(child, indent + 1)
 
     for root in trace.roots:
         lines.append(f"prove -> {root.clause.goal}")
-        for child in root.children or []:
+        for child in root.children:
             visit(child, 1)
     return "\n".join(lines)

@@ -8,7 +8,7 @@ and can produce/check compact proof certificates.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 from .kernel import (
     Context,
@@ -22,7 +22,8 @@ from .kernel import (
     normalize,
     var_matches_scheme,
 )
-from .syntax import App, Fun, Term, V, Var, apply_subst, false, true
+from .syntax import App, Fun, Term, V, Var, apply_subst, false, match, true
+from .rule_classes import RuleClass
 from .trace import ProofNode, ProofTrace, _new_node
 from .validation import _validate_clause_sorts, _validate_rule_sorts
 from .generalize import (
@@ -380,6 +381,74 @@ def fertilize_clause(clause: Clause, engine: Engine) -> Optional[Clause]:
     return None
 
 
+def _matching_subterms(
+    pattern: Term, term: Term
+) -> list[tuple[Term, dict[Var, Term]]]:
+    """Return every subterm of ``term`` that matches ``pattern``."""
+
+    matches: list[tuple[Term, dict[Var, Term]]] = []
+    subst = match(pattern, term)
+    if subst is not None:
+        matches.append((term, subst))
+    if isinstance(term, Fun):
+        for arg in term.args:
+            matches.extend(_matching_subterms(pattern, arg))
+    return matches
+
+
+def _forward_chain_conditions_hold(
+    rule: Rule, subst: dict[Var, Term], clause: Clause, engine: Engine
+) -> bool:
+    if not rule.conditions:
+        return True
+    local = _local_engine_for_clause(clause, engine)
+    for left, right in rule.conditions:
+        if not local.holds(apply_subst(left, subst), apply_subst(right, subst)):
+            return False
+    return True
+
+
+def forward_chain_clause(clause: Clause, engine: Engine) -> Optional[Clause]:
+    """Add local equalities from forward-chaining-class rules.
+
+    The initial forward-chaining pass is intentionally simple: when a
+    forward-chaining rule's left-hand side matches the goal or any assumption
+    subterm, add the corresponding instantiated equality as a new local
+    assumption. The clause is not simplified here; callers can feed the result
+    back into the normal proof loop.
+    """
+
+    theory = engine.theory
+    if theory is None:
+        return None
+    entries = theory.list_named_rule_entries(rule_class=RuleClass.FORWARD_CHAINING)
+    if not entries:
+        return None
+
+    seen = set(clause.assumptions)
+    additions: list[tuple[Term, Term]] = []
+    targets = [clause.goal]
+    for left, right in clause.assumptions:
+        targets.extend((left, right))
+
+    for entry in entries.values():
+        rule = entry.rule
+        for target in targets:
+            for matched_term, subst in _matching_subterms(rule.lhs, target):
+                if not _forward_chain_conditions_hold(rule, subst, clause, engine):
+                    continue
+                derived = apply_subst(rule.rhs, subst)
+                pair = (matched_term, derived)
+                if pair[0] == pair[1] or pair in seen:
+                    continue
+                seen.add(pair)
+                additions.append(pair)
+
+    if not additions:
+        return None
+    return Clause(clause.assumptions + tuple(additions), clause.goal, clause.disequalities)
+
+
 def split_clause(clause: Clause) -> list[Clause]:
     """Split ``if`` goals into branch obligations."""
 
@@ -416,98 +485,15 @@ def split_clause(clause: Clause) -> list[Clause]:
             return [clause]
 
 
-def _prove_kernel(
-    clause: Clause,
-    engine: Engine,
-    depth: int,
-    induction_handler: Optional[
-        Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
-    ] = None,
-    proof_node: Optional[ProofNode] = None,
-) -> bool:
-    with engine.var_context():
-        return _prove_kernel_impl(clause, engine, depth, induction_handler, proof_node)
-
-
-def _prove_kernel_impl(
-    clause: Clause,
-    engine: Engine,
-    depth: int,
-    induction_handler: Optional[
-        Callable[[Clause, int, Optional[ProofNode]], Optional[bool]]
-    ] = None,
-    proof_node: Optional[ProofNode] = None,
-) -> bool:
-    if proof_node is not None:
-        proof_node.note = f"depth={depth}"
-    if depth <= 0:
-        if proof_node is not None:
-            proof_node.solved = False
-        return False
-
-    simplified = simplify_clause(clause, engine)
-    if proof_node is not None:
-        proof_node.children.append(_new_node("simplify", simplified))
-    if clause_is_unsatisfiable(simplified, engine):
-        if proof_node is not None:
-            proof_node.solved = False
-        return False
-
-    if clause_solved(simplified):
-        if proof_node is not None:
-            proof_node.solved = True
-        return True
-
-    branches = split_clause(simplified)
-    if len(branches) == 1:
-        # Try fertilization before falling back to induction or failure.
-        fertilized = fertilize_clause(simplified, engine)
-        if fertilized is not None and fertilized != simplified:
-            fert_node = _new_node("fertilize", fertilized)
-            if proof_node is not None:
-                proof_node.children.append(fert_node)
-            result = _prove_kernel_impl(
-                fertilized, engine, depth - 1, induction_handler, fert_node
-            )
-            if result:
-                if proof_node is not None:
-                    proof_node.solved = True
-                return True
-
-        if induction_handler is not None:
-            induced = induction_handler(simplified, depth, proof_node)
-            if induced is not None:
-                if proof_node is not None:
-                    proof_node.solved = induced
-                return induced
-        if proof_node is not None:
-            proof_node.solved = False
-        return False
-
-    next_depth = depth - 1
-    branch_results = []
-    for index, branch in enumerate(branches):
-        child = _new_node("branch", branch, note=f"index={index}")
-        if proof_node is not None:
-            proof_node.children.append(child)
-        branch_results.append(
-            _prove_kernel_impl(branch, engine, next_depth, induction_handler, child)
-        )
-    out = all(branch_results)
-    if proof_node is not None:
-        proof_node.solved = out
-    return out
-
-
 def prove(
     clause: Clause,
     engine: Engine,
     depth: int = 5,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
-    """Attempt proof by simplify/split recursion up to ``depth``."""
+    """Attempt proof using the waterfall prover without explicit induction."""
 
-    return _prove_kernel(clause, engine, depth, proof_node=proof_node)
+    return prove_with_waterfall(clause, engine, depth=depth, proof_node=proof_node)
 
 
 def prove_with_induction(
@@ -521,151 +507,19 @@ def prove_with_induction(
     generalize: bool = True,
     destructor_elim: bool = True,
 ) -> bool:
-    """Attempt proof with optional induction when plain recursion stalls.
+    """Attempt proof using the waterfall prover with explicit induction."""
 
-    Args:
-        clause: The clause to prove.
-        engine: The proving engine.
-        var: The induction variable.
-        scheme: The induction scheme.
-        depth: Maximum proof search depth.
-        induction_depth: Number of nested inductions allowed.
-        proof_node: Optional proof tree node for tracing.
-        generalize: If True (default), attempt generalization before induction.
-        destructor_elim: If True (default), attempt destructor elimination
-                        before induction to expose selector applications as
-                        plain variables.
-
-    Returns:
-        True if the proof succeeded, False otherwise.
-    """
-
-    if not var_matches_scheme(var, scheme):
-        if proof_node is not None:
-            proof_node.solved = False
-            proof_node.note = f"sort mismatch for scheme {scheme.name}"
-        return False
-
-    if destructor_elim and induction_depth > 0:
-        de_result = destructor_elim_clause(clause, var, scheme, engine)
-        if de_result is not None:
-            if proof_node is not None:
-                de_node = _new_node(
-                    "destructor-elim",
-                    clause,
-                    note=f"var={var.name}, scheme={scheme.name}",
-                )
-                proof_node.children.append(de_node)
-                proof_node.solved = None
-            else:
-                de_node = None
-            de_ok = _prove_induction_on_clause(
-                de_result,
-                engine,
-                var,
-                scheme,
-                depth,
-                induction_depth,
-                de_node,
-                f"var={var.name}, scheme={scheme.name}, destructor-elim",
-            )
-            if de_ok:
-                if proof_node is not None:
-                    proof_node.solved = True
-                return True
-
-    if generalize and induction_depth > 0:
-        gen_result = generalize_clause(clause, engine, induction_var=var)
-        if gen_result is not None:
-            generalized_clause, _gen_map = gen_result
-            if proof_node is not None:
-                gen_node = _new_node(
-                    "generalize",
-                    clause,
-                    note=f"var={var.name}, scheme={scheme.name}",
-                )
-                proof_node.children.append(gen_node)
-                proof_node.solved = None
-            else:
-                gen_node = None
-            gen_ok = _prove_induction_on_clause(
-                generalized_clause,
-                engine,
-                var,
-                scheme,
-                depth,
-                induction_depth,
-                gen_node,
-                f"var={var.name}, scheme={scheme.name}, generalized",
-            )
-            if gen_ok:
-                if proof_node is not None:
-                    proof_node.solved = True
-                return True
-
-    return _prove_induction_on_clause(
+    return prove_with_waterfall(
         clause,
         engine,
-        var,
-        scheme,
-        depth,
-        induction_depth,
-        proof_node,
-        f"var={var.name}, scheme={scheme.name}",
+        depth=depth,
+        var=var,
+        scheme=scheme,
+        induction_depth=induction_depth,
+        generalize=generalize,
+        destructor_elim=destructor_elim,
+        proof_node=proof_node,
     )
-
-
-def _prove_induction_on_clause(
-    clause: Clause,
-    engine: Engine,
-    var: Var,
-    scheme: InductionScheme,
-    depth: int,
-    induction_depth: int,
-    proof_node: Optional[ProofNode],
-    note: str,
-) -> bool:
-    """Helper that runs the actual induction proof on a given clause."""
-
-    def induction_handler(
-        simplified_clause: Clause,
-        current_depth: int,
-        current_node: Optional[ProofNode],
-    ) -> Optional[bool]:
-        if induction_depth <= 0:
-            return False
-        branches = induction_branches(simplified_clause, var, scheme)
-        if not branches:
-            return False
-        induction_node = _new_node(
-            "induction",
-            simplified_clause,
-            note=note,
-        )
-        if current_node is not None:
-            current_node.children.append(induction_node)
-        next_induction = induction_depth - 1
-        branch_results = []
-        for index, branch in enumerate(branches):
-            child = _new_node("induction-branch", branch, note=f"index={index}")
-            induction_node.children.append(child)
-            branch_results.append(
-                prove_with_induction(
-                    branch,
-                    engine,
-                    var,
-                    scheme,
-                    current_depth,
-                    next_induction,
-                    child,
-                    generalize=False,
-                    destructor_elim=False,
-                )
-            )
-        induction_node.solved = all(branch_results)
-        return induction_node.solved
-
-    return _prove_kernel(clause, engine, depth, induction_handler, proof_node)
 
 
 def prove_with_registered_induction(
@@ -680,14 +534,15 @@ def prove_with_registered_induction(
 ) -> bool:
     """Run induction proof using a scheme looked up by name."""
 
-    scheme = get_induction_scheme(engine, scheme_name)
-    if scheme is None:
-        if proof_node is not None:
-            proof_node.solved = False
-            proof_node.note = f"unknown scheme {scheme_name}"
-        return False
-    return prove_with_induction(
-        clause, engine, var, scheme, depth, induction_depth, proof_node, generalize
+    return prove_with_waterfall(
+        clause,
+        engine,
+        depth=depth,
+        var=var,
+        scheme_name=scheme_name,
+        induction_depth=induction_depth,
+        generalize=generalize,
+        proof_node=proof_node,
     )
 
 
@@ -702,45 +557,25 @@ def prove_with_trace(
     generalize: bool = True,
 ) -> tuple[bool, ProofTrace]:
     """Run proof search and return both success flag and trace tree."""
-
-    trace = ProofTrace()
-    root = _new_node("prove", clause)
-    trace.roots.append(root)
-
     if var is None:
-        return prove(clause, engine, depth=depth, proof_node=root), trace
-    if scheme is not None:
-        return (
-            prove_with_induction(
-                clause,
-                engine,
-                var,
-                scheme,
-                depth=depth,
-                induction_depth=induction_depth,
-                proof_node=root,
-                generalize=generalize,
-            ),
-            trace,
-        )
-    if scheme_name is not None:
-        return (
-            prove_with_registered_induction(
-                clause,
-                engine,
-                var,
-                scheme_name,
-                depth=depth,
-                induction_depth=induction_depth,
-                proof_node=root,
-                generalize=generalize,
-            ),
-            trace,
-        )
-
-    root.note = "missing scheme for induction trace"
-    root.solved = False
-    return False, trace
+        return prove_with_waterfall_trace(clause, engine, depth=depth)
+    if scheme is None and scheme_name is None:
+        trace = ProofTrace()
+        root = _new_node("prove", clause)
+        trace.roots.append(root)
+        root.note = "missing scheme for induction trace"
+        root.solved = False
+        return False, trace
+    return prove_with_waterfall_trace(
+        clause,
+        engine,
+        depth=depth,
+        var=var,
+        scheme=scheme,
+        scheme_name=scheme_name,
+        induction_depth=induction_depth,
+        generalize=generalize,
+    )
 
 
 def prove_with_auto_induction(
@@ -751,26 +586,7 @@ def prove_with_auto_induction(
     proof_node: Optional[ProofNode] = None,
     generalize: bool = True,
 ) -> tuple[bool, ProofTrace]:
-    """Run proof search with automatic induction variable selection.
-
-    This function selects the induction variable automatically using
-    heuristics (recursive call analysis, measure functions, type filtering).
-    If auto-selection fails, raises ValueError.
-
-    Args:
-        clause: The clause to prove.
-        engine: The proving engine.
-        depth: Maximum proof search depth.
-        induction_depth: Number of nested inductions allowed.
-        proof_node: Optional proof tree node for tracing.
-        generalize: If True, attempt generalization before induction.
-
-    Returns:
-        A tuple of (success, proof_trace).
-
-    Raises:
-        ValueError: If no suitable induction variable can be found.
-    """
+    """Run waterfall proof search with automatic induction variable selection."""
     auto_var = choose_induction_var(clause, engine)
     sort = auto_var.sort
     if sort is None:
@@ -800,18 +616,327 @@ def prove_with_auto_induction(
     root.children.append(auto_node)
     root.solved = None
 
-    success = prove_with_induction(
+    success = prove_with_waterfall(
         clause,
         engine,
-        auto_var,
-        auto_scheme,
         depth=depth,
+        var=auto_var,
+        scheme=auto_scheme,
         induction_depth=induction_depth,
-        proof_node=auto_node,
         generalize=generalize,
+        auto_induction=False,
+        proof_node=auto_node,
     )
     root.solved = success
     return success, trace
+
+
+def _resolve_waterfall_induction_target(
+    clause: Clause,
+    engine: Engine,
+    var: Optional[Var],
+    scheme: Optional[InductionScheme],
+    auto_induction: bool,
+    proof_node: Optional[ProofNode],
+) -> tuple[Optional[Var], Optional[InductionScheme]]:
+    if var is not None and scheme is not None:
+        return var, scheme
+    if not auto_induction:
+        return None, None
+    try:
+        auto_var = choose_induction_var(clause, engine)
+    except ValueError:
+        return None, None
+    auto_scheme = _get_scheme_for_sort(engine, auto_var.sort or "")
+    if auto_scheme is None:
+        return None, None
+    if proof_node is not None:
+        proof_node.children.append(
+            _new_node(
+                "waterfall-auto-induction-select",
+                clause,
+                note=f"var={auto_var.name}, scheme={auto_scheme.name}",
+            )
+        )
+    return auto_var, auto_scheme
+
+
+def _prove_with_waterfall_impl(
+    clause: Clause,
+    engine: Engine,
+    depth: int,
+    var: Optional[Var],
+    scheme: Optional[InductionScheme],
+    induction_depth: int,
+    generalize: bool,
+    destructor_elim: bool,
+    auto_induction: bool,
+    proof_node: Optional[ProofNode],
+) -> bool:
+    if proof_node is not None:
+        proof_node.note = f"depth={depth}"
+    if depth <= 0:
+        if proof_node is not None:
+            proof_node.solved = False
+        return False
+
+    simplified = simplify_clause(clause, engine)
+    if proof_node is not None:
+        proof_node.children.append(_new_node("waterfall-simplify", simplified))
+    if clause_is_unsatisfiable(simplified, engine):
+        if proof_node is not None:
+            proof_node.children.append(_new_node("waterfall-prune", simplified))
+            proof_node.solved = False
+        return False
+    if clause_solved(simplified):
+        if proof_node is not None:
+            proof_node.solved = True
+        return True
+
+    branches = split_clause(simplified)
+    if len(branches) > 1:
+        split_node = _new_node(
+            "waterfall-split", simplified, note=f"branches={len(branches)}"
+        )
+        if proof_node is not None:
+            proof_node.children.append(split_node)
+        split_results: list[bool] = []
+        for index, branch in enumerate(branches):
+            child = _new_node("waterfall-branch", branch, note=f"index={index}")
+            split_node.children.append(child)
+            split_results.append(
+                _prove_with_waterfall_impl(
+                    branch,
+                    engine,
+                    depth - 1,
+                    var,
+                    scheme,
+                    induction_depth,
+                    generalize,
+                    destructor_elim,
+                    auto_induction,
+                    child,
+                )
+            )
+        split_node.solved = all(split_results)
+        if proof_node is not None:
+            proof_node.solved = split_node.solved
+        return split_node.solved
+
+    forward_chained = forward_chain_clause(simplified, engine)
+    if forward_chained is not None and forward_chained != simplified:
+        fc_node = _new_node("waterfall-forward-chain", forward_chained)
+        if proof_node is not None:
+            proof_node.children.append(fc_node)
+        if _prove_with_waterfall_impl(
+            forward_chained,
+            engine,
+            depth - 1,
+            var,
+            scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+            fc_node,
+        ):
+            if proof_node is not None:
+                proof_node.solved = True
+            return True
+
+    fertilized = fertilize_clause(simplified, engine)
+    if fertilized is not None and fertilized != simplified:
+        fert_node = _new_node("waterfall-fertilize", fertilized)
+        if proof_node is not None:
+            proof_node.children.append(fert_node)
+        if _prove_with_waterfall_impl(
+            fertilized,
+            engine,
+            depth - 1,
+            var,
+            scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+            fert_node,
+        ):
+            if proof_node is not None:
+                proof_node.solved = True
+            return True
+
+    chosen_var, chosen_scheme = _resolve_waterfall_induction_target(
+        simplified, engine, var, scheme, auto_induction, proof_node
+    )
+    if chosen_var is not None and chosen_scheme is not None and induction_depth > 0:
+        if destructor_elim:
+            de_result = destructor_elim_clause(
+                simplified, chosen_var, chosen_scheme, engine
+            )
+            if de_result is not None and de_result != simplified:
+                de_node = _new_node(
+                    "waterfall-destructor-elim",
+                    de_result,
+                    note=f"var={chosen_var.name}, scheme={chosen_scheme.name}",
+                )
+                if proof_node is not None:
+                    proof_node.children.append(de_node)
+                if _prove_with_waterfall_impl(
+                    de_result,
+                    engine,
+                    depth - 1,
+                    chosen_var,
+                    chosen_scheme,
+                    induction_depth,
+                    generalize,
+                    False,
+                    auto_induction,
+                    de_node,
+                ):
+                    if proof_node is not None:
+                        proof_node.solved = True
+                    return True
+
+        if generalize:
+            gen_result = generalize_clause(simplified, engine, induction_var=chosen_var)
+            if gen_result is not None:
+                generalized_clause, _ = gen_result
+                if generalized_clause != simplified:
+                    gen_node = _new_node(
+                        "waterfall-generalize",
+                        generalized_clause,
+                        note=f"var={chosen_var.name}, scheme={chosen_scheme.name}",
+                    )
+                    if proof_node is not None:
+                        proof_node.children.append(gen_node)
+                    if _prove_with_waterfall_impl(
+                        generalized_clause,
+                        engine,
+                        depth - 1,
+                        chosen_var,
+                        chosen_scheme,
+                        induction_depth,
+                        False,
+                        destructor_elim,
+                        auto_induction,
+                        gen_node,
+                    ):
+                        if proof_node is not None:
+                            proof_node.solved = True
+                        return True
+
+        induction_goals = induction_branches(simplified, chosen_var, chosen_scheme)
+        if induction_goals:
+            induction_node = _new_node(
+                "waterfall-induction",
+                simplified,
+                note=f"var={chosen_var.name}, scheme={chosen_scheme.name}",
+            )
+            if proof_node is not None:
+                proof_node.children.append(induction_node)
+            results: list[bool] = []
+            for index, branch in enumerate(induction_goals):
+                child = _new_node(
+                    "waterfall-induction-branch", branch, note=f"index={index}"
+                )
+                induction_node.children.append(child)
+                results.append(
+                    _prove_with_waterfall_impl(
+                        branch,
+                        engine,
+                        depth,
+                        chosen_var,
+                        chosen_scheme,
+                        induction_depth - 1,
+                        generalize=False,
+                        destructor_elim=False,
+                        auto_induction=False,
+                        proof_node=child,
+                    )
+                )
+            induction_node.solved = all(results)
+            if proof_node is not None:
+                proof_node.solved = induction_node.solved
+            return induction_node.solved
+
+    if proof_node is not None:
+        proof_node.solved = False
+    return False
+
+
+def prove_with_waterfall(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    var: Optional[Var] = None,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+    induction_depth: int = 1,
+    generalize: bool = True,
+    destructor_elim: bool = True,
+    auto_induction: bool = False,
+    proof_node: Optional[ProofNode] = None,
+) -> bool:
+    """Run proof search through an explicit waterfall of proof stages."""
+
+    chosen_scheme = scheme
+    if chosen_scheme is None and scheme_name is not None:
+        chosen_scheme = get_induction_scheme(engine, scheme_name)
+    if var is not None and chosen_scheme is not None and not var_matches_scheme(
+        var, chosen_scheme
+    ):
+        if proof_node is not None:
+            proof_node.solved = False
+            proof_node.note = f"sort mismatch for scheme {chosen_scheme.name}"
+        return False
+    with engine.var_context():
+        return _prove_with_waterfall_impl(
+            clause,
+            engine,
+            depth,
+            var,
+            chosen_scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+            proof_node,
+        )
+
+
+def prove_with_waterfall_trace(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    var: Optional[Var] = None,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+    induction_depth: int = 1,
+    generalize: bool = True,
+    destructor_elim: bool = True,
+    auto_induction: bool = False,
+) -> tuple[bool, ProofTrace]:
+    """Run waterfall proof search and return a trace tree."""
+
+    trace = ProofTrace()
+    root = _new_node("prove", clause)
+    trace.roots.append(root)
+    return (
+        prove_with_waterfall(
+            clause,
+            engine,
+            depth=depth,
+            var=var,
+            scheme=scheme,
+            scheme_name=scheme_name,
+            induction_depth=induction_depth,
+            generalize=generalize,
+            destructor_elim=destructor_elim,
+            auto_induction=auto_induction,
+            proof_node=root,
+        ),
+        trace,
+    )
 
 
 def _get_scheme_for_sort(engine: Engine, sort: str) -> Optional[InductionScheme]:
@@ -848,12 +973,23 @@ def _local_engine_for_clause(clause: Clause, engine: Engine) -> Engine:
     )
 
 
-def _check_simplify_step(clause: Clause, engine: Engine) -> Clause:
-    return simplify_clause(clause, engine)
+def _check_destructor_elim_step(
+    clause: Clause,
+    var: Var,
+    scheme: InductionScheme,
+    engine: Engine,
+) -> Optional[Clause]:
+    return destructor_elim_clause(clause, var, scheme, engine)
 
 
-def _check_split_step(clause: Clause) -> list[Clause]:
-    return split_clause(clause)
+def _check_generalize_step(
+    clause: Clause, engine: Engine, induction_var: Var
+) -> Optional[Clause]:
+    result = generalize_clause(clause, engine, induction_var=induction_var)
+    if result is None:
+        return None
+    generalized_clause, _ = result
+    return generalized_clause
 
 
 def _check_induction_step(
@@ -894,50 +1030,6 @@ def _check_rewrite_step(clause: Clause, rule: Rule, engine: Engine) -> Clause:
     out = Clause(clause.assumptions, rewritten, clause.disequalities)
     _validate_clause_sorts(out, engine, "rewrite result")
     return out
-
-
-def _rewrite_term_recursive(term: Term, rule: Rule, engine: Engine) -> Optional[Term]:
-    """Try to rewrite term recursively, drilling into subterms.
-
-    Returns (rewritten, changed) where changed indicates if a rewrite occurred.
-    """
-    from .syntax import Fun
-
-    rewritten = engine.rewrite_once(term, rule)
-    if rewritten is not None:
-        return rewritten
-
-    match term:
-        case Fun(symbol, args) if args:
-            new_args = []
-            for arg in args:
-                result = _rewrite_term_recursive(arg, rule, engine)
-                if result is not None:
-                    new_args.append(result)
-                    return Fun(
-                        symbol,
-                        tuple(new_args[: len(args)] + list(args[len(new_args) :])),
-                    )
-                new_args.append(arg)
-            return None
-        case _:
-            return None
-
-
-def _rewrite_term_all(term: Term, rule: Rule, engine: Engine) -> Term:
-    """Rewrite term recursively, applying rule everywhere in subtrees."""
-    from .syntax import Fun
-
-    rewritten = engine.rewrite_once(term, rule)
-    if rewritten is not None:
-        term = rewritten
-
-    match term:
-        case Fun(symbol, args) if args:
-            new_args = [_rewrite_term_all(arg, rule, engine) for arg in args]
-            return Fun(symbol, tuple(new_args))
-        case _:
-            return term
 
 
 def _rewrite_first_subterm(term: Term, rule: Rule, engine: Engine) -> Optional[Term]:
@@ -1018,41 +1110,38 @@ def _check_rewrite_many_step(clause: Clause, rule: Rule, engine: Engine) -> Clau
     return out
 
 
-def _prove_certificate_kernel(
+def _prove_waterfall_certificate_impl(
     clause: Clause,
     engine: Engine,
     depth: int,
     var: Optional[Var],
     scheme: Optional[InductionScheme],
     induction_depth: int,
-) -> Optional[ProofCertificate]:
-    with engine.var_context():
-        return _prove_certificate_kernel_impl(
-            clause, engine, depth, var, scheme, induction_depth
-        )
-
-
-def _prove_certificate_kernel_impl(
-    clause: Clause,
-    engine: Engine,
-    depth: int,
-    var: Optional[Var],
-    scheme: Optional[InductionScheme],
-    induction_depth: int,
+    generalize: bool,
+    destructor_elim: bool,
+    auto_induction: bool,
 ) -> Optional[ProofCertificate]:
     if depth <= 0:
         return None
 
-    simplified = _check_simplify_step(clause, engine)
+    simplified = simplify_clause(clause, engine)
     if clause_solved(simplified):
         return ProofCertificate(clause=clause, simplified=simplified, step="solved")
 
-    branches = _check_split_step(simplified)
+    branches = split_clause(simplified)
     if len(branches) > 1:
         children: list[ProofCertificate] = []
         for branch in branches:
-            child = _prove_certificate_kernel_impl(
-                branch, engine, depth - 1, var, scheme, induction_depth
+            child = _prove_waterfall_certificate_impl(
+                branch,
+                engine,
+                depth - 1,
+                var,
+                scheme,
+                induction_depth,
+                generalize,
+                destructor_elim,
+                auto_induction,
             )
             if child is None:
                 return None
@@ -1064,18 +1153,118 @@ def _prove_certificate_kernel_impl(
             children=tuple(children),
         )
 
-    if var is not None and scheme is not None and induction_depth > 0:
-        induction_goals = induction_branches(simplified, var, scheme)
+    forward_chained = forward_chain_clause(simplified, engine)
+    if forward_chained is not None and forward_chained != simplified:
+        child = _prove_waterfall_certificate_impl(
+            forward_chained,
+            engine,
+            depth - 1,
+            var,
+            scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+        )
+        if child is not None:
+            return ProofCertificate(
+                clause=clause,
+                simplified=simplified,
+                step="forward-chain",
+                children=(child,),
+            )
+
+    fertilized = fertilize_clause(simplified, engine)
+    if fertilized is not None and fertilized != simplified:
+        child = _prove_waterfall_certificate_impl(
+            fertilized,
+            engine,
+            depth - 1,
+            var,
+            scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+        )
+        if child is not None:
+            return ProofCertificate(
+                clause=clause,
+                simplified=simplified,
+                step="fertilize",
+                children=(child,),
+            )
+
+    chosen_var, chosen_scheme = _resolve_waterfall_induction_target(
+        simplified, engine, var, scheme, auto_induction, proof_node=None
+    )
+    if chosen_var is not None and chosen_scheme is not None and induction_depth > 0:
+        if destructor_elim:
+            de_result = _check_destructor_elim_step(
+                simplified, chosen_var, chosen_scheme, engine
+            )
+            if de_result is not None and de_result != simplified:
+                child = _prove_waterfall_certificate_impl(
+                    de_result,
+                    engine,
+                    depth - 1,
+                    chosen_var,
+                    chosen_scheme,
+                    induction_depth,
+                    generalize,
+                    False,
+                    False,
+                )
+                if child is not None:
+                    return ProofCertificate(
+                        clause=clause,
+                        simplified=simplified,
+                        step="destructor-elim",
+                        children=(child,),
+                        var=chosen_var,
+                        scheme_name=chosen_scheme.name,
+                    )
+
+        if generalize:
+            generalized_clause = _check_generalize_step(simplified, engine, chosen_var)
+            if generalized_clause is not None and generalized_clause != simplified:
+                child = _prove_waterfall_certificate_impl(
+                    generalized_clause,
+                    engine,
+                    depth - 1,
+                    chosen_var,
+                    chosen_scheme,
+                    induction_depth,
+                    False,
+                    destructor_elim,
+                    False,
+                )
+                if child is not None:
+                    return ProofCertificate(
+                        clause=clause,
+                        simplified=simplified,
+                        step="generalize",
+                        children=(child,),
+                        var=chosen_var,
+                        scheme_name=chosen_scheme.name,
+                    )
+
+        induction_goals = induction_branches(simplified, chosen_var, chosen_scheme)
         if induction_goals:
+            for index, branch in enumerate(induction_goals):
+                _validate_clause_sorts(branch, engine, f"induction branch[{index}]")
             children = []
             for branch in induction_goals:
-                child = _prove_certificate_kernel_impl(
+                child = _prove_waterfall_certificate_impl(
                     branch,
                     engine,
                     depth,
-                    var,
-                    scheme,
+                    chosen_var,
+                    chosen_scheme,
                     induction_depth - 1,
+                    False,
+                    False,
+                    False,
                 )
                 if child is None:
                     return None
@@ -1085,8 +1274,8 @@ def _prove_certificate_kernel_impl(
                 simplified=simplified,
                 step="induction",
                 children=tuple(children),
-                var=var,
-                scheme_name=scheme.name,
+                var=chosen_var,
+                scheme_name=chosen_scheme.name,
             )
 
     return None
@@ -1101,18 +1290,51 @@ def prove_checked(
     scheme_name: Optional[str] = None,
     induction_depth: int = 1,
 ) -> tuple[bool, Optional[ProofCertificate]]:
-    """Attempt proof and return a certificate when successful."""
+    """Attempt checked proof using the waterfall prover."""
+
+    return prove_checked_with_waterfall(
+        clause,
+        engine,
+        depth=depth,
+        var=var,
+        scheme=scheme,
+        scheme_name=scheme_name,
+        induction_depth=induction_depth,
+    )
+
+
+def prove_checked_with_waterfall(
+    clause: Clause,
+    engine: Engine,
+    depth: int = 5,
+    var: Optional[Var] = None,
+    scheme: Optional[InductionScheme] = None,
+    scheme_name: Optional[str] = None,
+    induction_depth: int = 1,
+    generalize: bool = True,
+    destructor_elim: bool = True,
+    auto_induction: bool = False,
+) -> tuple[bool, Optional[ProofCertificate]]:
+    """Attempt waterfall proof search and return a certificate when successful."""
 
     if var is not None and scheme is None and scheme_name is not None:
         scheme = get_induction_scheme(engine, scheme_name)
-    if var is not None and scheme is None:
+    if var is not None and scheme is None and not auto_induction:
         return False, None
     if var is not None and scheme is not None and not var_matches_scheme(var, scheme):
         return False, None
-
-    cert = _prove_certificate_kernel(
-        clause, engine, depth, var, scheme, induction_depth
-    )
+    with engine.var_context():
+        cert = _prove_waterfall_certificate_impl(
+            clause,
+            engine,
+            depth,
+            var,
+            scheme,
+            induction_depth,
+            generalize,
+            destructor_elim,
+            auto_induction,
+        )
     return cert is not None, cert
 
 
@@ -1125,7 +1347,7 @@ def _check_certificate_node(
     if depth <= 0:
         return False
 
-    expected_simplified = _check_simplify_step(cert.clause, engine)
+    expected_simplified = simplify_clause(cert.clause, engine)
     if expected_simplified != cert.simplified:
         return False
 
@@ -1133,7 +1355,7 @@ def _check_certificate_node(
         return clause_solved(cert.simplified) and not cert.children
 
     if cert.step == "split":
-        branches = _check_split_step(cert.simplified)
+        branches = split_clause(cert.simplified)
         if len(branches) <= 1 or len(branches) != len(cert.children):
             return False
         if any(
@@ -1143,6 +1365,57 @@ def _check_certificate_node(
         return all(
             _check_certificate_node(child, engine, depth - 1, induction_depth)
             for child in cert.children
+        )
+
+    if cert.step == "forward-chain":
+        if len(cert.children) != 1:
+            return False
+        forward_chained = forward_chain_clause(cert.simplified, engine)
+        if forward_chained is None or cert.children[0].clause != forward_chained:
+            return False
+        return _check_certificate_node(
+            cert.children[0], engine, depth - 1, induction_depth
+        )
+
+    if cert.step == "fertilize":
+        if len(cert.children) != 1:
+            return False
+        fertilized = fertilize_clause(cert.simplified, engine)
+        if fertilized is None or cert.children[0].clause != fertilized:
+            return False
+        return _check_certificate_node(
+            cert.children[0], engine, depth - 1, induction_depth
+        )
+
+    if cert.step == "destructor-elim":
+        if (
+            len(cert.children) != 1
+            or cert.var is None
+            or cert.scheme_name is None
+            or induction_depth <= 0
+        ):
+            return False
+        scheme = get_induction_scheme(engine, cert.scheme_name)
+        if scheme is None or not var_matches_scheme(cert.var, scheme):
+            return False
+        de_result = _check_destructor_elim_step(cert.simplified, cert.var, scheme, engine)
+        if de_result is None or cert.children[0].clause != de_result:
+            return False
+        return _check_certificate_node(
+            cert.children[0], engine, depth - 1, induction_depth
+        )
+
+    if cert.step == "generalize":
+        if len(cert.children) != 1 or cert.var is None or cert.scheme_name is None:
+            return False
+        scheme = get_induction_scheme(engine, cert.scheme_name)
+        if scheme is None or not var_matches_scheme(cert.var, scheme):
+            return False
+        generalized_clause = _check_generalize_step(cert.simplified, engine, cert.var)
+        if generalized_clause is None or cert.children[0].clause != generalized_clause:
+            return False
+        return _check_certificate_node(
+            cert.children[0], engine, depth - 1, induction_depth
         )
 
     if cert.step == "induction":
@@ -1180,7 +1453,7 @@ def check_certificate(
 
 def _certificate_to_proof_node(cert: ProofCertificate) -> ProofNode:
     note = ""
-    if cert.step == "induction":
+    if cert.step in {"induction", "destructor-elim", "generalize"}:
         note = f"var={cert.var.name if cert.var is not None else '?'}, scheme={cert.scheme_name}"
     node = _new_node(f"checked-{cert.step}", cert.clause, note=note)
     node.children.append(_new_node("checked-simplify", cert.simplified))

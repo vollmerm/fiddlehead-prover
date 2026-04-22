@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Optional, Set, Tuple
 
-from .kernel import Engine, InductionScheme
-from .syntax import Fun, Term, V, Var, _VAR_NAME_SORT, apply_subst
+from .kernel import Engine, InductionScheme, is_ground
+from .syntax import Fun, Term, V, Var, _VAR_NAME_SORT, apply_subst, contains_var
 
 if TYPE_CHECKING:
     from .proof import Clause
@@ -107,18 +107,17 @@ def _fresh_var_for_term(term: Term, engine: Engine) -> Var:
 
     sort = _infer_term_sort_unsafe(term, engine)
     counter = 0
-    base_name = f"g"
+    base_name = "g"
     while True:
         name = f"{base_name}_{counter}"
         if not _name_used(name, engine):
-            v = V(name, sort)
-            return v
+            return V(name, sort)
         counter += 1
 
 
 def _name_used(name: str, engine: Engine) -> bool:
-    """Check if a variable name is already in use in the engine context."""
-    return name in engine.sort_arities
+    """Check if a variable name is already in use in the global var interner."""
+    return name in _VAR_NAME_SORT
 
 
 def _infer_term_sort_unsafe(term: Term, engine: Engine) -> Optional[str]:
@@ -169,7 +168,7 @@ def collect_rigid_terms(
         _count_proper_subterms(rhs, subterm_counts)
 
     for term, count in subterm_counts.items():
-        if induction_var is not None and _contains_var(term, induction_var):
+        if induction_var is not None and contains_var(term, induction_var):
             continue
         if _is_base_constructor(term):
             continue
@@ -179,25 +178,15 @@ def collect_rigid_terms(
             result.add(term)
 
 
-def _count_subterms(
-    term: Term, counts: Dict[Term, int], parent_counted: bool = False
-) -> None:
-    """Count occurrences of subterms.
-
-    Args:
-        term: The term to process.
-        counts: Dictionary tracking occurrence counts.
-        parent_counted: Whether this term was already counted by its parent.
-                       If False, we count this term (it's a proper subterm of the root).
-    """
+def _count_subterms(term: Term, counts: Dict[Term, int]) -> None:
+    """Count this term and all its subterms recursively."""
     match term:
         case Var():
             return
         case Fun(_, args):
-            if not parent_counted:
-                counts[term] = counts.get(term, 0) + 1
+            counts[term] = counts.get(term, 0) + 1
             for arg in args:
-                _count_subterms(arg, counts, parent_counted=True)
+                _count_subterms(arg, counts)
             return
     raise TypeError(f"Unsupported term type: {type(term)!r}")
 
@@ -213,7 +202,7 @@ def _count_proper_subterms(term: Term, counts: Dict[Term, int]) -> None:
             return
         case Fun(_, args):
             for arg in args:
-                _count_subterms(arg, counts, parent_counted=False)
+                _count_subterms(arg, counts)
             return
     raise TypeError(f"Unsupported term type: {type(term)!r}")
 
@@ -226,7 +215,7 @@ def _is_rigid_ground(term: Term) -> bool:
     """
     if _is_base_constructor(term):
         return False
-    return not _contains_variables(term)
+    return is_ground(term)
 
 
 def _is_base_constructor(term: Term) -> bool:
@@ -261,26 +250,6 @@ def _replace_terms(term: Term, term_to_var: Dict[Term, Var]) -> Term:
         case Fun(symbol, args):
             new_args = tuple(_replace_terms(arg, term_to_var) for arg in args)
             return Fun(symbol, new_args)
-    raise TypeError(f"Unsupported term type: {type(term)!r}")
-
-
-def _contains_variables(term: Term) -> bool:
-    """Check if a term contains any variables."""
-    match term:
-        case Var():
-            return True
-        case Fun(_, args):
-            return any(_contains_variables(arg) for arg in args)
-    raise TypeError(f"Unsupported term type: {type(term)!r}")
-
-
-def _contains_var(term: Term, var: Var) -> bool:
-    """Check if a term contains a specific variable."""
-    match term:
-        case Var() as v:
-            return v.name == var.name
-        case Fun(_, args):
-            return any(_contains_var(arg, var) for arg in args)
     raise TypeError(f"Unsupported term type: {type(term)!r}")
 
 

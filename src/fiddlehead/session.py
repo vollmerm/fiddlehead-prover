@@ -12,11 +12,12 @@ from .proof import (
     _check_rewrite_first_step,
     _check_rewrite_many_step,
     _check_rewrite_step,
-    _check_split_step,
     clause_solved,
     goal_equality,
     simplify_clause_with_stages,
+    split_clause,
 )
+from .rule_classes import RuleClass
 from .select_induction import choose_induction_var
 from .syntax import Term, Var, true
 from .theory import (
@@ -68,15 +69,23 @@ class ProofSession:
 
         return self._format_clause(clause)
 
-    def format_rules(self, pattern: Optional[str] = None) -> str:
+    def format_rules(
+        self,
+        pattern: Optional[str] = None,
+        rule_class: Optional[RuleClass] = None,
+    ) -> str:
         """Render named rules in a readable list for REPL use."""
 
-        named = self.theory.list_named_rules(pattern)
+        named = self.theory.list_named_rule_entries(pattern, rule_class=rule_class)
         if not named:
             return "<no named rules>"
         lines: list[str] = []
-        for name, (rule, source) in named.items():
-            lines.append(f"- {name} [{source.name.lower()}]: {rule.lhs} -> {rule.rhs}")
+        for name, entry in named.items():
+            class_text = ",".join(str(spec) for spec in entry.rule_classes)
+            label = entry.source.name.lower()
+            if class_text:
+                label = f"{label}|{class_text}"
+            lines.append(f"- {name} [{label}]: {entry.rule.lhs} -> {entry.rule.rhs}")
         return "\n".join(lines)
 
     def format_ihs(self) -> str:
@@ -241,7 +250,7 @@ class ProofSession:
             raise ValueError("No goals left.")
         original = self.goals[0]
         try:
-            branches = _check_split_step(original)
+            branches = split_clause(original)
         except ValueError as exc:
             raise self._tactic_error("split", exc) from exc
         kids = [
@@ -555,17 +564,22 @@ class ProofSession:
         )
         self.goals[0] = rewritten
 
-    def list_rules(self, pattern: Optional[str] = None) -> Dict[str, Rule]:
+    def list_rules(
+        self,
+        pattern: Optional[str] = None,
+        rule_class: Optional[RuleClass] = None,
+    ) -> Dict[str, Rule]:
         """List named rules from the theory, optionally filtered by pattern.
 
         Args:
             pattern: Optional glob pattern to filter rule names (e.g., 'add*', '*comm*').
+            rule_class: Optional rule class filter.
 
         Returns:
             Dictionary mapping rule names to their Rule objects.
         """
-        named = self.theory.list_named_rules(pattern)
-        return {name: rule for name, (rule, _) in named.items()}
+        named = self.theory.list_named_rule_entries(pattern, rule_class=rule_class)
+        return {name: entry.rule for name, entry in named.items()}
 
     def list_ihs(self) -> Dict[str, Rule]:
         """List induction hypotheses available for the current goal.

@@ -8,7 +8,7 @@ Fiddlehead works with first-order terms and equality goals:
 
 - Normalize terms with rewrite rules
 - Reason about equalities in context
-- Prove simple clauses by simplification, branching, and induction
+- Prove simple clauses with a waterfall of simplification, forward chaining, branching, and induction
 - Infer and check sorts
 - Load small theories with scoped rewrites and induction schemes
 
@@ -23,6 +23,7 @@ x = V("x", "Nat")
 zero = Const("0")
 S = lambda t: App("S", t)
 add = lambda a, b: App("add", a, b)
+eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
 install_theory(engine, nat_theory(), activate_scopes=True)

@@ -145,6 +145,7 @@ __all__ = [
     "get_induction_scheme",
     "get_induction_scheme_for_sort",
     "make_engine",
+    "Engine",
     "EngineConfig",
     "SortSignature",
     "default_engine_config",

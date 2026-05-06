@@ -25,6 +25,7 @@ from .kernel import (
     _decreases,
     get_induction_scheme,
     get_induction_scheme_for_sort,
+    int_induction_scheme,
     list_induction_scheme,
     make_engine,
     nat_induction_scheme,
@@ -42,6 +43,7 @@ from .proof import (
     check_certificate,
     clause_solved,
     goal_equality,
+    prove_checked,
     simplify_clause_with_stages,
 )
 from .rule_classes import (
@@ -157,7 +159,13 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
 
 
 def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
-    """Return an integer ring-style theory in a dedicated Int namespace."""
+    """Return an integer ring-style theory in a dedicated Int namespace.
+
+    Operations: z0, z1, zint, zadd, zmul, zneg, zsucc, zpred, zsub,
+    znonneg, zleq, zlt.
+
+    Includes the ``int`` induction scheme (zsucc / zpred constructors).
+    """
 
     x = V("int_x", "Int")
     y = V("int_y", "Int")
@@ -191,6 +199,24 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
     def zneg(term: Term) -> Term:
         return App("zneg", term)
 
+    def zsucc(term: Term) -> Term:
+        return App("zsucc", term)
+
+    def zpred(term: Term) -> Term:
+        return App("zpred", term)
+
+    def zsub(left: Term, right: Term) -> Term:
+        return App("zsub", left, right)
+
+    def znonneg(term: Term) -> Term:
+        return App("znonneg", term)
+
+    def zleq(left: Term, right: Term) -> Term:
+        return App("zleq", left, right)
+
+    def zlt(left: Term, right: Term) -> Term:
+        return App("zlt", left, right)
+
     return Theory(
         name=name,
         version=version,
@@ -208,12 +234,34 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
                 (TypeConst("Int"), TypeConst("Int")), TypeConst("Int")
             ),
             "zneg": SortSignature((TypeConst("Int"),), TypeConst("Int")),
+            "zsucc": SortSignature((TypeConst("Int"),), TypeConst("Int")),
+            "zpred": SortSignature((TypeConst("Int"),), TypeConst("Int")),
+            "zsub": SortSignature(
+                (TypeConst("Int"), TypeConst("Int")), TypeConst("Int")
+            ),
+            "znonneg": SortSignature((TypeConst("Int"),), TypeConst("Bool")),
+            "zleq": SortSignature(
+                (TypeConst("Int"), TypeConst("Int")), TypeConst("Bool")
+            ),
+            "zlt": SortSignature(
+                (TypeConst("Int"), TypeConst("Int")), TypeConst("Bool")
+            ),
         },
         rules=(
             Rule(z0, zint(zero_nat, zero_nat), skip_decrease_check=True),
             Rule(z1, zint(one_nat, zero_nat), skip_decrease_check=True),
             Rule(zadd(z0, y), y, skip_decrease_check=True),
             Rule(zadd(y, z0), y, skip_decrease_check=True),
+            Rule(
+                zadd(zint(zero_nat, zero_nat), y),
+                y,
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zadd(y, zint(zero_nat, zero_nat)),
+                y,
+                skip_decrease_check=True,
+            ),
             Rule(
                 zadd(zint(a, b), zint(c, d)),
                 zint(add_nat(a, c), add_nat(b, d)),
@@ -223,8 +271,28 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
             Rule(zneg(zint(a, b)), zint(b, a)),
             Rule(zmul(z0, y), z0, skip_decrease_check=True),
             Rule(zmul(y, z0), z0, skip_decrease_check=True),
+            Rule(
+                zmul(zint(zero_nat, zero_nat), y),
+                zint(zero_nat, zero_nat),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(y, zint(zero_nat, zero_nat)),
+                zint(zero_nat, zero_nat),
+                skip_decrease_check=True,
+            ),
             Rule(zmul(z1, y), y, skip_decrease_check=True),
             Rule(zmul(y, z1), y, skip_decrease_check=True),
+            Rule(
+                zmul(zint(one_nat, zero_nat), y),
+                y,
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(y, zint(one_nat, zero_nat)),
+                y,
+                skip_decrease_check=True,
+            ),
             Rule(
                 zmul(zint(a, b), zint(c, d)),
                 zint(
@@ -234,8 +302,45 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
                 skip_decrease_check=True,
             ),
             Rule(zint(succ(a), succ(b)), zint(a, b)),
+            Rule(zsucc(zint(a, b)), zint(succ(a), b), skip_decrease_check=True),
+            Rule(zpred(zint(a, b)), zint(a, succ(b)), skip_decrease_check=True),
+            Rule(zpred(zsucc(x)), x, skip_decrease_check=True),
+            Rule(zsucc(zpred(x)), x, skip_decrease_check=True),
+            Rule(zneg(zsucc(x)), zpred(zneg(x)), skip_decrease_check=True),
+            Rule(zneg(zpred(x)), zsucc(zneg(x)), skip_decrease_check=True),
+            Rule(zsub(x, y), zadd(x, zneg(y)), skip_decrease_check=True),
+            Rule(znonneg(zint(zero_nat, zero_nat)), true, skip_decrease_check=True),
+            Rule(
+                znonneg(zint(succ(a), zero_nat)),
+                true,
+                skip_decrease_check=True,
+            ),
+            Rule(
+                znonneg(zint(zero_nat, succ(b))),
+                false,
+                skip_decrease_check=True,
+            ),
+            Rule(
+                znonneg(zint(succ(a), succ(b))),
+                znonneg(zint(a, b)),
+                skip_decrease_check=True,
+            ),
+            Rule(zleq(x, y), znonneg(zsub(y, x)), skip_decrease_check=True),
+            Rule(zlt(x, y), zleq(zsucc(x), y), skip_decrease_check=True),
         ),
-        precedence={"zneg": 5, "zmul": 4, "zadd": 3, "zint": 2},
+        schemes=(int_induction_scheme(z0),),
+        precedence={
+            "zneg": 5,
+            "zmul": 4,
+            "zadd": 3,
+            "zsucc": 2,
+            "zpred": 2,
+            "zsub": 2,
+            "zint": 2,
+            "zleq": 1,
+            "zlt": 1,
+            "znonneg": 0,
+        },
         assoc=("zadd", "zmul"),
         comm=("zadd", "zmul"),
     )
@@ -1025,3 +1130,76 @@ class TheoremEnvironment:
         )
         self._add_rule_to_scope(scope, rule_name)
         return rule
+
+
+def register_int_lemmas(
+    engine: Engine,
+    depth: int = 12,
+    induction_depth: int = 2,
+    scope: str = "int-lemmas",
+) -> list[str]:
+    """Prove and register standard integer-theory lemmas.
+
+    Requires ``nat_theory`` and ``int_theory`` already installed.
+    Returns the list of registered lemma names.
+    """
+    from .syntax import reset_var_interner
+
+    reset_var_interner()
+
+    env = get_theorem_environment(engine)
+    x = V("il_x", "Int")
+    y = V("il_y", "Int")
+    z = V("il_z", "Int")
+
+    def eq(left: Term, right: Term) -> Term:
+        return App("eq", left, right)
+
+    def zadd(left: Term, right: Term) -> Term:
+        return App("zadd", left, right)
+
+    def zneg(term: Term) -> Term:
+        return App("zneg", term)
+
+    int_scheme = get_induction_scheme(engine, "int")
+    if int_scheme is None:
+        raise ValueError(
+            "int_theory must be installed before calling register_int_lemmas"
+        )
+
+    lemmas_defs = [
+        (
+            "zadd-assoc",
+            Clause((), eq(zadd(zadd(x, y), z), zadd(x, zadd(y, z)))),
+            x,
+            int_scheme,
+        ),
+        (
+            "zneg-involutive",
+            Clause((), eq(zneg(zneg(x)), x)),
+            x,
+            int_scheme,
+        ),
+    ]
+
+    registered: list[str] = []
+    for name, clause, var, scheme in lemmas_defs:
+        ok, cert = prove_checked(
+            clause,
+            engine,
+            depth=depth,
+            var=var,
+            scheme=scheme,
+            induction_depth=induction_depth,
+        )
+        if not ok or cert is None:
+            raise RuntimeError(f"Failed to prove lemma: {name}")
+
+        lemma = Lemma(name=name, clause=clause, certificate=cert)
+        env.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
+        env.register_lemma_rewrite(name, scope=scope, orientation="auto")
+        registered.append(name)
+
+    env.create_scope(scope)
+    env.activate_scope(scope)
+    return registered

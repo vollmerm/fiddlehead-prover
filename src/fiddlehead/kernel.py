@@ -449,6 +449,33 @@ def tree_induction_scheme(
     )
 
 
+def int_induction_scheme(
+    zero: Optional[Term] = None,
+    succ_symbol: str = "zsucc",
+    pred_symbol: str = "zpred",
+) -> InductionScheme:
+    """Build the standard integer induction scheme.
+
+    Integer induction uses two synthetic constructors:
+
+    * ``zsucc`` (successor) — represents ``zint(S(a), b)``
+    * ``zpred`` (predecessor) — represents ``zint(a, S(b))``
+
+    Both are Int -> Int and unfold the pair representation.
+    """
+    if zero is None:
+        zero = Const("z0")
+    return InductionScheme(
+        name="int",
+        sort="Int",
+        base_terms=(zero,),
+        constructors=(
+            InductionConstructor(succ_symbol, 1, (0,)),
+            InductionConstructor(pred_symbol, 1, (0,)),
+        ),
+    )
+
+
 def var_matches_scheme(var: Var, scheme: InductionScheme) -> bool:
     return var.sort is None or var.sort == scheme.sort
 
@@ -875,6 +902,9 @@ __all__ = [
     "infer_sort",
     "nat_induction_scheme",
     "list_induction_scheme",
+    "map_induction_scheme",
+    "tree_induction_scheme",
+    "int_induction_scheme",
     "make_engine",
     "normalize",
     "register_induction_scheme",

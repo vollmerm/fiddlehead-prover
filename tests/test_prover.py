@@ -1108,6 +1108,12 @@ def test_int_theory() -> None:
     zadd = lambda l, r: App("zadd", l, r)
     zmul = lambda l, r: App("zmul", l, r)
     zneg = lambda t: App("zneg", t)
+    zsucc = lambda t: App("zsucc", t)
+    zpred = lambda t: App("zpred", t)
+    zsub = lambda l, r: App("zsub", l, r)
+    znonneg = lambda t: App("znonneg", t)
+    zleq = lambda l, r: App("zleq", l, r)
+    zlt = lambda l, r: App("zlt", l, r)
     eq = lambda l, r: App("eq", l, r)
 
     int_core = int_theory()
@@ -1122,6 +1128,23 @@ def test_int_theory() -> None:
     assert "zadd" in int_core.assoc and "zadd" in int_core.comm
     assert "zmul" in int_core.assoc and "zmul" in int_core.comm
 
+    assert int_core.sort_signatures["zsucc"].arg_sorts == (TypeConst("Int"),)
+    assert int_core.sort_signatures["zsucc"].result_sort == TypeConst("Int")
+    assert int_core.sort_signatures["zpred"].arg_sorts == (TypeConst("Int"),)
+    assert int_core.sort_signatures["zsub"].result_sort == TypeConst("Int")
+    assert int_core.sort_signatures["znonneg"].result_sort == TypeConst("Bool")
+    assert int_core.sort_signatures["zleq"].result_sort == TypeConst("Bool")
+    assert int_core.sort_signatures["zlt"].result_sort == TypeConst("Bool")
+
+    assert len(int_core.schemes) == 1
+    scheme = int_core.schemes[0]
+    assert scheme.name == "int"
+    assert scheme.sort == "Int"
+    assert len(scheme.base_terms) == 1
+    assert len(scheme.constructors) == 2
+    assert scheme.constructors[0].symbol == "zsucc"
+    assert scheme.constructors[1].symbol == "zpred"
+
     missing_dep_engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
     with pytest.raises(ValueError, match="Missing theory dependency: core.nat"):
         install_theory(missing_dep_engine, int_theory(), activate_scopes=True)
@@ -1135,6 +1158,16 @@ def test_int_theory() -> None:
     assert str(normalize(zneg(z1), engine)) == "zint(0, S(0))"
     assert str(normalize(zadd(zint(S(S(zero_nat)), zero_nat), zint(zero_nat, S(zero_nat))), engine)) == "zint(S(0), 0)"
 
+    assert str(normalize(zsucc(z0), engine)) == "zint(S(0), 0)"
+    assert str(normalize(zpred(z0), engine)) == "zint(0, S(0))"
+    assert str(normalize(znonneg(z0), engine)) == "true"
+    assert str(normalize(znonneg(z1), engine)) == "true"
+    assert str(normalize(zsub(z1, z0), engine)) == "zint(S(0), 0)"
+    assert str(normalize(zleq(z0, z1), engine)) == "true"
+    assert str(normalize(zlt(z0, z1), engine)) == "true"
+    assert str(normalize(zsucc(zpred(z0)), engine)) == "zint(0, 0)"
+    assert str(normalize(zneg(zsucc(z0)), engine)) == "zint(0, S(0))"
+
     comm_goal = Clause((), eq(zadd(x, y), zadd(y, x)))
     assert prove(comm_goal, engine, depth=8)
     mul_comm_goal = Clause((), eq(zmul(x, y), zmul(y, x)))
@@ -1142,6 +1175,71 @@ def test_int_theory() -> None:
 
     context_goal = Clause(((a, b),), eq(zadd(a, c), zadd(b, c)))
     assert prove(context_goal, engine, depth=8)
+
+
+def test_int_theory_induction() -> None:
+    reset_var_interner()
+    x = V("ii_x", "Int")
+    y = V("ii_y", "Int")
+    z = V("ii_z", "Int")
+
+    z0 = Const("z0")
+    z1 = Const("z1")
+    zadd = lambda l, r: App("zadd", l, r)
+    zneg = lambda t: App("zneg", t)
+    zsucc = lambda t: App("zsucc", t)
+    zpred = lambda t: App("zpred", t)
+    zsub = lambda l, r: App("zsub", l, r)
+    zleq = lambda l, r: App("zleq", l, r)
+    eq = lambda l, r: App("eq", l, r)
+
+    engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, int_theory(), activate_scopes=True)
+
+    scheme = get_induction_scheme(engine, "int")
+    assert scheme is not None
+    assert scheme.name == "int"
+
+    neg_involutive = Clause((), eq(zneg(zneg(x)), x))
+    assert prove_with_induction(
+        neg_involutive, engine, x, scheme, depth=12, induction_depth=2
+    )
+
+    add_zero_r = Clause((), eq(zadd(x, z0), x))
+    assert prove_with_induction(
+        add_zero_r, engine, x, scheme, depth=12, induction_depth=2
+    )
+
+
+def test_int_lemmas() -> None:
+    reset_var_interner()
+    x = V("il_x", "Int")
+    y = V("il_y", "Int")
+    z = V("il_z", "Int")
+
+    zadd = lambda l, r: App("zadd", l, r)
+    zneg = lambda t: App("zneg", t)
+    eq = lambda l, r: App("eq", l, r)
+
+    engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    install_theory(engine, int_theory(), activate_scopes=True)
+
+    names = register_int_lemmas(engine, depth=12, induction_depth=2)
+    assert "zadd-assoc" in names
+    assert "zneg-involutive" in names
+
+    env = get_theorem_environment(engine)
+    assert "zadd-assoc" in env.lemmas
+    assert "zneg-involutive" in env.lemmas
+
+    assert str(normalize(zneg(zneg(x)), engine)) == str(x)
+
+    assoc_goal = Clause((), eq(zadd(zadd(x, y), z), zadd(x, zadd(y, z))))
+    assert prove(assoc_goal, engine, depth=4)
+
+    assert not hasattr(engine, "missing_theory")
 
 
 def test_lpo_decrease_non_ac_symbol() -> None:

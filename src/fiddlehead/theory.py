@@ -327,6 +327,46 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
             ),
             Rule(zleq(x, y), znonneg(zsub(y, x)), skip_decrease_check=True),
             Rule(zlt(x, y), zleq(zsucc(x), y), skip_decrease_check=True),
+            Rule(
+                zadd(zsucc(x), y),
+                zsucc(zadd(x, y)),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zadd(y, zsucc(x)),
+                zsucc(zadd(y, x)),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zadd(zpred(x), y),
+                zpred(zadd(x, y)),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zadd(y, zpred(x)),
+                zpred(zadd(y, x)),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(zsucc(x), y),
+                zadd(zmul(x, y), y),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(y, zsucc(x)),
+                zadd(zmul(y, x), y),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(zpred(x), y),
+                zadd(zmul(x, y), zneg(y)),
+                skip_decrease_check=True,
+            ),
+            Rule(
+                zmul(y, zpred(x)),
+                zadd(zmul(y, x), zneg(y)),
+                skip_decrease_check=True,
+            ),
         ),
         schemes=(int_induction_scheme(z0),),
         precedence={

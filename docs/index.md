@@ -46,5 +46,6 @@ pip install -e .
 ## Documentation
 
 - [Public API Guide](public-api.md)
+- [Integer Arithmetic Tutorial](integer-theory.md)
 - [Hoare Logic Tutorial](hoare-logic-tutorial.md)
 - `examples/` directory for larger proof scripts

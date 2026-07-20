@@ -10,12 +10,12 @@ from fiddlehead import *
 
 
 def run_proof(name: str, clause: Clause, engine: Engine, depth: int = 10, var=None, scheme=None) -> None:
-    ok, trace = prove_with_trace(clause, engine, depth=depth, var=var, scheme=scheme)
+    ok = prove(clause, engine, depth=depth, var=var, scheme=scheme)
     print(f"\n=== {name} ===")
     print("Goal:", clause.goal)
     print("Proved:", ok)
     assert ok, f"Expected proof to succeed: {name}"
-    print(render_proof_trace(trace))
+    print(render_proof_trace(ok.trace))
 
 
 def main() -> None:

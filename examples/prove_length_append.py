@@ -28,7 +28,7 @@ def main() -> None:
     list_scheme = get_induction_scheme(engine, "list")
     assert list_scheme is not None
 
-    ok, trace = prove_with_trace(
+    ok = prove(
         goal,
         engine,
         depth=14,
@@ -37,7 +37,7 @@ def main() -> None:
         induction_depth=1,
     )
     assert ok
-    print(render_proof_trace(trace))
+    print(render_proof_trace(ok.trace))
 
 
 if __name__ == "__main__":

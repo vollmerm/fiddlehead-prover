@@ -46,7 +46,7 @@ def main() -> None:
     goal = Clause((), eq(twice(n), add(n, n)), ())
     nat_scheme = get_induction_scheme(engine, "nat")
     assert nat_scheme is not None
-    ok, trace = prove_with_trace(
+    ok = prove(
         goal,
         engine,
         depth=14,
@@ -57,7 +57,7 @@ def main() -> None:
     print("Theorem: forall n, twice(n) = add(n, n)")
     print(f"Proved by induction: {ok}\n")
     if ok:
-        print(render_proof_trace(trace))
+        print(render_proof_trace(ok.trace))
     assert ok
 
 

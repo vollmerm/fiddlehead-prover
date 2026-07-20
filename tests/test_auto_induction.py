@@ -19,7 +19,6 @@ from fiddlehead.prover import (
     make_engine,
     nat_theory,
     prove,
-    prove_with_trace,
     render_proof_trace,
     reset_var_interner,
 )
@@ -86,10 +85,10 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
+        ok = prove(goal, engine, depth=14, auto_induction=True)
         assert ok, "Auto induction should succeed for length(append(xs, ys))"
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "auto-induction-select" in trace_str
         assert "var=xs" in trace_str
         assert "scheme=list" in trace_str
@@ -105,10 +104,10 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=15, auto_induction=True)
+        ok = prove(goal, engine, depth=15, auto_induction=True)
         assert ok, "Auto induction should succeed for append associativity"
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "auto-induction-select" in trace_str
         assert "var=xs" in trace_str
 
@@ -122,10 +121,10 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(append(xs, nil), xs))
 
-        ok, trace = prove_with_trace(goal, engine, depth=10, auto_induction=True)
+        ok = prove(goal, engine, depth=10, auto_induction=True)
         assert ok, "Auto induction should succeed for append(xs, nil) = xs"
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "auto-induction-select" in trace_str
         assert "var=xs" in trace_str
 
@@ -139,10 +138,10 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(add(x, y), add(y, x)))
 
-        ok, trace = prove_with_trace(goal, engine, depth=5, auto_induction=True)
+        ok = prove(goal, engine, depth=5, auto_induction=True)
         assert ok, "Goal that simplifies to true should succeed"
         # Solved by simplification alone, so no induction stage appears.
-        assert "auto-induction-select" not in render_proof_trace(trace)
+        assert "auto-induction-select" not in render_proof_trace(ok.trace)
 
     def test_no_nat_vars_raises_error(self, auto_env: dict) -> None:
         """Auto-induction should raise ValueError when no nat variables exist."""
@@ -158,7 +157,7 @@ class TestAutoInductionSelection:
         goal = Clause((), eq(a, b))
 
         with pytest.raises(ValueError, match="No suitable induction variable"):
-            prove_with_trace(goal, engine, depth=5, auto_induction=True)
+            prove(goal, engine, depth=5, auto_induction=True)
 
     def test_only_ground_terms_raises_error(self, auto_env: dict) -> None:
         """Auto-induction should raise ValueError when clause has only ground terms."""
@@ -169,7 +168,7 @@ class TestAutoInductionSelection:
         goal = Clause((), eq(zero, zero))
 
         with pytest.raises(ValueError, match="No suitable induction variable"):
-            prove_with_trace(goal, engine, depth=5, auto_induction=True)
+            prove(goal, engine, depth=5, auto_induction=True)
 
 
 class TestAutoInductionTrace:
@@ -187,10 +186,10 @@ class TestAutoInductionTrace:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
+        ok = prove(goal, engine, depth=14, auto_induction=True)
         assert ok
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
 
         assert "auto-induction-select" in trace_str
         assert "auto-selected var=xs" in trace_str or "var=xs" in trace_str
@@ -208,11 +207,11 @@ class TestAutoInductionTrace:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
+        ok = prove(goal, engine, depth=14, auto_induction=True)
         assert ok
-        assert len(trace.roots) == 1
+        assert len(ok.trace.roots) == 1
 
-        root = trace.roots[0]
+        root = ok.trace.roots[0]
         assert root.kind == "prove"
         assert root.solved is True
 
@@ -307,10 +306,10 @@ class TestAutoInductionEdgeCases:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(ys), length(xs))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=15, auto_induction=True)
+        ok = prove(goal, engine, depth=15, auto_induction=True)
         assert ok
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "var=xs" in trace_str or "var=ys" in trace_str
 
     def test_variable_in_goal_not_assumptions(self, auto_env: dict) -> None:
@@ -328,10 +327,10 @@ class TestAutoInductionEdgeCases:
             eq(length(append(xs, ys)), add(length(xs), length(ys))),
         )
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
+        ok = prove(goal, engine, depth=14, auto_induction=True)
         assert ok
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "var=xs" in trace_str, "xs should be preferred (appears in goal)"
 
 
@@ -350,18 +349,18 @@ class TestAutoInuctionWithScheme:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
+        ok = prove(goal, engine, depth=14, auto_induction=True)
         assert ok
 
         list_scheme = get_induction_scheme(engine, "list")
         assert list_scheme is not None
 
-        trace_str = render_proof_trace(trace)
+        trace_str = render_proof_trace(ok.trace)
         assert "scheme=list" in trace_str
 
 
 class TestProveWithAutoInductionVariants:
-    """Tests for prove_with_trace(auto_induction=True) with different parameters."""
+    """Tests for prove(auto_induction=True) with different parameters."""
 
     def test_with_induction_depth(self, auto_env: dict) -> None:
         """Should work with custom induction_depth."""
@@ -375,7 +374,7 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, induction_depth=2, auto_induction=True)
+        ok = prove(goal, engine, depth=14, induction_depth=2, auto_induction=True)
         assert ok
 
     def test_with_generalize_true(self, auto_env: dict) -> None:
@@ -390,7 +389,7 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, generalize=True, auto_induction=True)
+        ok = prove(goal, engine, depth=14, generalize=True, auto_induction=True)
         assert ok
 
     def test_with_generalize_false(self, auto_env: dict) -> None:
@@ -405,5 +404,5 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_trace(goal, engine, depth=14, generalize=False, auto_induction=True)
+        ok = prove(goal, engine, depth=14, generalize=False, auto_induction=True)
         assert ok

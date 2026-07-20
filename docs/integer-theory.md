@@ -178,14 +178,7 @@ scheme = get_induction_scheme(engine, "int")
 assert scheme is not None
 
 neg_involutive = Clause((), eq(zneg(zneg(x)), x))
-ok, trace = prove_with_trace(
-    neg_involutive, engine,
-    depth=12,
-    var=x,
-    scheme=scheme,
-    induction_depth=2,
-)
-assert ok
+assert prove(neg_involutive, engine, depth=12, var=x, induction_depth=2)
 ```
 
 Walk through what happens under the hood:
@@ -215,14 +208,7 @@ Another useful property that works by induction:
 
 ```python
 add_zero_r = Clause((), eq(zadd(x, z0), x))
-ok, trace = prove_with_trace(
-    add_zero_r, engine,
-    depth=12,
-    var=x,
-    scheme=scheme,
-    induction_depth=2,
-)
-assert ok
+assert prove(add_zero_r, engine, depth=12, var=x, induction_depth=2)
 ```
 
 Here the base case `zadd(z0, z0) = z0` is discharged by the identity rule
@@ -347,20 +333,13 @@ y = V("y", "Int")
 assert prove(Clause((), eq(zadd(x, y), zadd(y, x))), engine, depth=8)
 assert prove(Clause((), eq(zmul(x, y), zmul(y, x))), engine, depth=8)
 
-# --- Induction ---
-scheme = get_induction_scheme(engine, "int")
-
-ok, trace = prove_with_trace(
-    Clause((), eq(zneg(zneg(x)), x)),
-    engine, depth=12, var=x, scheme=scheme, induction_depth=2,
+# --- Induction (scheme inferred from x's Int sort) ---
+assert prove(
+    Clause((), eq(zneg(zneg(x)), x)), engine, depth=12, var=x, induction_depth=2
 )
-assert ok
-
-ok, trace = prove_with_trace(
-    Clause((), eq(zadd(x, z0), x)),
-    engine, depth=12, var=x, scheme=scheme, induction_depth=2,
+assert prove(
+    Clause((), eq(zadd(x, z0), x)), engine, depth=12, var=x, induction_depth=2
 )
-assert ok
 
 # --- Lemmas ---
 register_int_lemmas(engine, depth=12, induction_depth=2)

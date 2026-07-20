@@ -94,13 +94,13 @@ def main() -> None:
     assert sess1.qed(), "Theorem 1 session proof failed"
     print("\n  ProofSession: qed() = True")
 
-    ok1, cert1 = prove_checked(
+    ok1 = prove_checked(
         goal1, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
     )
-    assert ok1 and cert1 is not None, "prove_checked failed for append_right_id"
+    assert ok1 and ok1.certificate is not None, "prove_checked failed for append_right_id"
     print(f"  prove_checked: {ok1}")
 
-    theory.register_lemma(Lemma("append_right_id", goal1, cert1), depth=12, induction_depth=1)
+    theory.register_lemma(Lemma("append_right_id", goal1, ok1.certificate), depth=12, induction_depth=1)
     theory.register_lemma_rewrite("append_right_id", scope="lemma_rewrites", orientation="auto")
     theory.activate_scope("lemma_rewrites")   # activate once; later rewrites auto-sync
     print("  Registered: 'lemma-append_right_id'  =>  append(xs,nil) -> xs")
@@ -151,13 +151,13 @@ def main() -> None:
     assert sess2.qed(), "Theorem 2 session proof failed"
     print("\n  ProofSession: qed() = True")
 
-    ok2, cert2 = prove_checked(
+    ok2 = prove_checked(
         goal2, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
     )
-    assert ok2 and cert2 is not None, "prove_checked failed for append_assoc"
+    assert ok2 and ok2.certificate is not None, "prove_checked failed for append_assoc"
     print(f"  prove_checked: {ok2}")
 
-    theory.register_lemma(Lemma("append_assoc", goal2, cert2), depth=12, induction_depth=1)
+    theory.register_lemma(Lemma("append_assoc", goal2, ok2.certificate), depth=12, induction_depth=1)
     theory.register_lemma_rewrite("append_assoc", scope="lemma_rewrites", orientation="auto")
     # scope already active — _add_rule_to_scope auto-syncs the engine
     print("  Registered: 'lemma-append_assoc'")
@@ -230,13 +230,13 @@ def main() -> None:
     assert sess3.qed(), "Theorem 3 session proof failed"
     print("\n  ProofSession: qed() = True")
 
-    ok3, cert3 = prove_checked(
+    ok3 = prove_checked(
         goal3, engine, depth=14, var=xs, scheme=list_scheme, induction_depth=1
     )
-    assert ok3 and cert3 is not None, "prove_checked failed for rev_append"
+    assert ok3 and ok3.certificate is not None, "prove_checked failed for rev_append"
     print(f"  prove_checked: {ok3}")
 
-    theory.register_lemma(Lemma("rev_append", goal3, cert3), depth=14, induction_depth=1)
+    theory.register_lemma(Lemma("rev_append", goal3, ok3.certificate), depth=14, induction_depth=1)
     theory.register_lemma_rewrite("rev_append", scope="lemma_rewrites", orientation="auto")
     print("  Registered: 'lemma-rev_append'")
     print("              rev(append(xs,ys)) -> append(rev(ys),rev(xs))")
@@ -291,13 +291,13 @@ def main() -> None:
     assert sess4.qed(), "Theorem 4 session proof failed"
     print("\n  ProofSession: qed() = True")
 
-    ok4, cert4 = prove_checked(
+    ok4 = prove_checked(
         goal4, engine, depth=16, var=xs, scheme=list_scheme, induction_depth=1
     )
-    assert ok4 and cert4 is not None, "prove_checked failed for rev_rev"
+    assert ok4 and ok4.certificate is not None, "prove_checked failed for rev_rev"
     print(f"  prove_checked: {ok4}")
 
-    theory.register_lemma(Lemma("rev_rev", goal4, cert4), depth=16, induction_depth=1)
+    theory.register_lemma(Lemma("rev_rev", goal4, ok4.certificate), depth=16, induction_depth=1)
     print("  Registered: 'rev_rev'")
 
     # =========================================================================

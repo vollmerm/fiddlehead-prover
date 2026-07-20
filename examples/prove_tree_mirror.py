@@ -90,7 +90,7 @@ def main() -> None:
 
     print("Theorem 3: mirror(node(leaf, v, leaf)) = node(leaf, v, leaf)  (single node)")
     goal3 = Clause((), eq(mirror(node(leaf, v, leaf)), node(leaf, v, leaf)), ())
-    ok3, trace3 = prove_with_trace(goal3, engine, depth=8)
+    ok3 = prove(goal3, engine, depth=8)
     print(f"  Proved: {ok3}")
     if ok3:
         print(f"  Simplified to: {goal3.goal} -> true")

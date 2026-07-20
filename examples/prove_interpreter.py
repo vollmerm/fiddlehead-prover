@@ -274,7 +274,7 @@ def main() -> None:
     print("Proof by rewriting (no induction needed)\n")
 
     ext_goal = Clause((), eq(get(exec_cmd(assign(x, e), s), x), some(eval_a(e, s))), ())
-    ok2, trace2 = prove_with_trace(ext_goal, engine, depth=10)
+    ok2 = prove(ext_goal, engine, depth=10)
     print(f"Proved: {ok2}")
     if ok2:
         print(f"Simplified to: {ext_goal.goal} -> true")

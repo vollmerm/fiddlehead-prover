@@ -592,6 +592,43 @@ def _resolve_waterfall_induction_target(
     return auto_var, auto_scheme
 
 
+@dataclass
+class _SearchStats:
+    """Mutable flags collected during one proof search, for diagnostics."""
+
+    depth_exhausted: bool = False
+
+
+def _failure_reason(stats: _SearchStats, depth: int) -> str:
+    if stats.depth_exhausted:
+        return f"search depth exhausted (depth={depth}); retry with a larger depth"
+    return "no proof found within the search space"
+
+
+@dataclass(frozen=True)
+class ProofResult:
+    """Outcome of a proof search.
+
+    Truthy exactly when the proof succeeded, so ``assert prove(...)`` works.
+    ``trace`` always holds the search tree (render it with
+    ``render_proof_trace``); ``reason`` explains a failure; ``certificate``
+    is set by :func:`prove_checked` on success.
+    """
+
+    ok: bool
+    trace: ProofTrace
+    reason: Optional[str] = None
+    certificate: Optional[ProofCertificate] = None
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def __repr__(self) -> str:
+        if self.ok:
+            return "ProofResult(ok=True)"
+        return f"ProofResult(ok=False, reason={self.reason!r})"
+
+
 def _prove_with_waterfall_impl(
     clause: Clause,
     engine: Engine,
@@ -603,10 +640,12 @@ def _prove_with_waterfall_impl(
     destructor_elim: bool,
     auto_induction: bool,
     proof_node: Optional[ProofNode],
+    stats: _SearchStats,
 ) -> bool:
     if proof_node is not None:
         proof_node.note = f"depth={depth}"
     if depth <= 0:
+        stats.depth_exhausted = True
         if proof_node is not None:
             proof_node.solved = False
         return False
@@ -647,6 +686,7 @@ def _prove_with_waterfall_impl(
                     destructor_elim,
                     auto_induction,
                     child,
+                    stats,
                 )
             )
         split_node.solved = all(split_results)
@@ -670,6 +710,7 @@ def _prove_with_waterfall_impl(
             destructor_elim,
             auto_induction,
             fc_node,
+            stats,
         ):
             if proof_node is not None:
                 proof_node.solved = True
@@ -691,6 +732,7 @@ def _prove_with_waterfall_impl(
             destructor_elim,
             auto_induction,
             fert_node,
+            stats,
         ):
             if proof_node is not None:
                 proof_node.solved = True
@@ -723,6 +765,7 @@ def _prove_with_waterfall_impl(
                     False,
                     auto_induction,
                     de_node,
+                    stats,
                 ):
                     if proof_node is not None:
                         proof_node.solved = True
@@ -751,6 +794,7 @@ def _prove_with_waterfall_impl(
                         destructor_elim,
                         auto_induction,
                         gen_node,
+                        stats,
                     ):
                         if proof_node is not None:
                             proof_node.solved = True
@@ -783,6 +827,7 @@ def _prove_with_waterfall_impl(
                         destructor_elim=False,
                         auto_induction=False,
                         proof_node=child,
+                        stats=stats,
                     )
                 )
             induction_node.solved = all(results)
@@ -806,22 +851,27 @@ def prove(
     generalize: bool = True,
     destructor_elim: bool = True,
     auto_induction: bool = False,
-    proof_node: Optional[ProofNode] = None,
-) -> bool:
+) -> ProofResult:
     """Prove a clause with the waterfall search.
 
-    Pass ``var=`` to prove by induction on that variable; the scheme is looked
-    up from the variable's sort unless ``scheme=`` or ``scheme_name=`` is given.
-    Pass ``auto_induction=True`` to let the prover pick the variable. Invalid
+    Returns a truthy :class:`ProofResult` on success; ``result.trace`` holds
+    the search tree and ``result.reason`` explains a failure. Pass ``var=``
+    to prove by induction on that variable; the scheme is looked up from the
+    variable's sort unless ``scheme=`` or ``scheme_name=`` is given. Pass
+    ``auto_induction=True`` to let the prover pick the variable. Invalid
     induction requests (unknown scheme, sort mismatch, variable not in the
-    clause) raise ``ValueError`` rather than returning ``False``.
+    clause) raise ``ValueError`` rather than failing silently.
     """
 
     chosen_scheme = _validate_induction_request(
         clause, engine, var, scheme, scheme_name, auto_induction
     )
+    trace = ProofTrace()
+    root = _new_node("prove", clause)
+    trace.roots.append(root)
+    stats = _SearchStats()
     with engine.var_context():
-        return _prove_with_waterfall_impl(
+        ok = _prove_with_waterfall_impl(
             clause,
             engine,
             depth,
@@ -831,42 +881,13 @@ def prove(
             generalize,
             destructor_elim,
             auto_induction,
-            proof_node,
+            root,
+            stats,
         )
-
-
-def prove_with_trace(
-    clause: Clause,
-    engine: Engine,
-    depth: int = 12,
-    var: Optional[Var] = None,
-    scheme: Optional[InductionScheme] = None,
-    scheme_name: Optional[str] = None,
-    induction_depth: int = 1,
-    generalize: bool = True,
-    destructor_elim: bool = True,
-    auto_induction: bool = False,
-) -> tuple[bool, ProofTrace]:
-    """Run the same search as :func:`prove` and return ``(ok, trace)``."""
-
-    trace = ProofTrace()
-    root = _new_node("prove", clause)
-    trace.roots.append(root)
-    return (
-        prove(
-            clause,
-            engine,
-            depth=depth,
-            var=var,
-            scheme=scheme,
-            scheme_name=scheme_name,
-            induction_depth=induction_depth,
-            generalize=generalize,
-            destructor_elim=destructor_elim,
-            auto_induction=auto_induction,
-            proof_node=root,
-        ),
-        trace,
+    return ProofResult(
+        ok=ok,
+        trace=trace,
+        reason=None if ok else _failure_reason(stats, depth),
     )
 
 
@@ -1051,8 +1072,10 @@ def _prove_waterfall_certificate_impl(
     generalize: bool,
     destructor_elim: bool,
     auto_induction: bool,
+    stats: _SearchStats,
 ) -> Optional[ProofCertificate]:
     if depth <= 0:
+        stats.depth_exhausted = True
         return None
 
     simplified = simplify_clause(clause, engine)
@@ -1073,6 +1096,7 @@ def _prove_waterfall_certificate_impl(
                 generalize,
                 destructor_elim,
                 auto_induction,
+                stats,
             )
             if child is None:
                 return None
@@ -1096,6 +1120,7 @@ def _prove_waterfall_certificate_impl(
             generalize,
             destructor_elim,
             auto_induction,
+            stats,
         )
         if child is not None:
             return ProofCertificate(
@@ -1117,6 +1142,7 @@ def _prove_waterfall_certificate_impl(
             generalize,
             destructor_elim,
             auto_induction,
+            stats,
         )
         if child is not None:
             return ProofCertificate(
@@ -1145,6 +1171,7 @@ def _prove_waterfall_certificate_impl(
                     generalize,
                     False,
                     False,
+                    stats,
                 )
                 if child is not None:
                     return ProofCertificate(
@@ -1169,6 +1196,7 @@ def _prove_waterfall_certificate_impl(
                     False,
                     destructor_elim,
                     False,
+                    stats,
                 )
                 if child is not None:
                     return ProofCertificate(
@@ -1196,6 +1224,7 @@ def _prove_waterfall_certificate_impl(
                     False,
                     False,
                     False,
+                    stats,
                 )
                 if child is None:
                     return None
@@ -1223,12 +1252,18 @@ def prove_checked(
     generalize: bool = True,
     destructor_elim: bool = True,
     auto_induction: bool = False,
-) -> tuple[bool, Optional[ProofCertificate]]:
-    """Run the same search as :func:`prove` and return a certificate on success."""
+) -> ProofResult:
+    """Run the same search as :func:`prove`, recording a checked certificate.
+
+    On success the returned :class:`ProofResult` carries ``certificate`` (and
+    a trace derived from it); validate certificates with
+    :func:`check_certificate`.
+    """
 
     chosen_scheme = _validate_induction_request(
         clause, engine, var, scheme, scheme_name, auto_induction
     )
+    stats = _SearchStats()
     with engine.var_context():
         cert = _prove_waterfall_certificate_impl(
             clause,
@@ -1240,8 +1275,17 @@ def prove_checked(
             generalize,
             destructor_elim,
             auto_induction,
+            stats,
         )
-    return cert is not None, cert
+    if cert is not None:
+        return ProofResult(
+            ok=True, trace=certificate_to_proof_trace(cert), certificate=cert
+        )
+    trace = ProofTrace()
+    root = _new_node("prove", clause)
+    root.solved = False
+    trace.roots.append(root)
+    return ProofResult(ok=False, trace=trace, reason=_failure_reason(stats, depth))
 
 
 def _check_certificate_node(

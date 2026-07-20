@@ -69,9 +69,9 @@ engine = make_engine(rules=builtin_rules())
 install_theory(engine, list_theory())
 
 goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
-ok, trace = prove_with_trace(goal, engine, var=xs)
-assert ok
-print(render_proof_trace(trace))
+result = prove(goal, engine, var=xs)
+assert result
+print(render_proof_trace(result.trace))
 ```
 
 Here is a small manual proof of `append(xs, nil) = xs` using `ProofSession`:

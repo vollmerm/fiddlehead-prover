@@ -208,7 +208,7 @@ rather than individual rewrite steps.
 The trace is a `ProofTrace` tree built from `ProofNode` events. The main entry
 points are:
 
-- `prove_with_trace(...)`, which returns `(result, trace)`
+- `prove(...)`, whose `ProofResult` carries the tree as `result.trace`
 - `render_proof_trace(trace)`, which prints the tree
 - `render_waterfall_trace(trace)`, which groups the same run by waterfall stage
 
@@ -272,7 +272,7 @@ can be rendered with `render_proof_trace(...)` just like automated runs.
 
 Proof explanations come from three paths:
 
-- direct proof search with `prove_with_trace(...)`
+- direct proof search via `prove(...).trace`
 - certificate replay with `certificate_to_proof_trace(...)`
 - interactive history through `ProofSession.trace`
 

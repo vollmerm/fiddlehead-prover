@@ -34,24 +34,24 @@ def main() -> None:
 
     print("1. get(empty, k) = none")
     goal1 = Clause((), eq(get(empty, k), none), ())
-    ok1, _ = prove_with_trace(goal1, engine, depth=8)
+    ok1 = prove(goal1, engine, depth=8)
     print(f"   Proved: {ok1}\n")
 
     print("2. get(put(m, k, v), k) = some(v)")
     goal2 = Clause((), eq(get(put(m, k, v), k), some(v)), ())
-    ok2, _ = prove_with_trace(goal2, engine, depth=8)
+    ok2 = prove(goal2, engine, depth=8)
     print(f"   Proved: {ok2}\n")
 
     print(
         "3. get(put(put(m, k2, v2), k1, v1), k1) = some(v1)  [unrelated writes reordered]"
     )
     goal3 = Clause((), eq(get(put(put(m, k2, v2), k1, v1), k1), some(v1)), ())
-    ok3, _ = prove_with_trace(goal3, engine, depth=8)
+    ok3 = prove(goal3, engine, depth=8)
     print(f"   Proved: {ok3}\n")
 
     print("4. get(put(put(m, k1, v1), k2, v2), k1) = some(v1)  [requires k2 != k1]")
     goal4 = Clause((), eq(get(put(put(m, k1, v1), k2, v2), k1), some(v1)), ((k2, k1),))
-    ok4, _ = prove_with_trace(goal4, engine, depth=8)
+    ok4 = prove(goal4, engine, depth=8)
     print(f"   Proved with k2 != k1: {ok4}\n")
 
     print(

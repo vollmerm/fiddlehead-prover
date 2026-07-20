@@ -23,7 +23,6 @@ from fiddlehead.prover import (
     normalize,
     prove,
     prove_checked,
-    prove_with_trace,
     render_proof_trace,
     register_sort_signature,
     render_waterfall_trace,
@@ -83,10 +82,10 @@ def test_waterfall_uses_forward_chaining_rules() -> None:
 
     assert prove(goal, engine, depth=4)
 
-    ok, trace = prove_with_trace(goal, engine, depth=4)
+    ok = prove(goal, engine, depth=4)
     assert ok
 
-    rendered = render_waterfall_trace(trace)
+    rendered = render_waterfall_trace(ok.trace)
     assert "forward-chain" in rendered
     assert "simplify" in rendered
 
@@ -112,14 +111,15 @@ def test_prove_checked_uses_waterfall_by_default() -> None:
     )
     theory.activate_scope("fc_scope")
 
-    ok, cert = prove_checked(Clause((), eq(App("id_nat", zero), zero)), engine, depth=4)
-    assert ok and cert is not None
-    assert cert.step == "forward-chain"
-    assert check_certificate(cert, engine, depth=4)
+    ok = prove_checked(Clause((), eq(App("id_nat", zero), zero)), engine, depth=4)
+    assert ok and ok.certificate is not None
+    assert ok.certificate.step == "forward-chain"
+    assert check_certificate(ok.certificate, engine, depth=4)
 
-    trace = certificate_to_proof_trace(cert)
-    rendered = render_proof_trace(trace)
+    rendered = render_proof_trace(certificate_to_proof_trace(ok.certificate))
     assert "checked-forward-chain" in rendered
+    # prove_checked pre-populates the same trace on the result.
+    assert "checked-forward-chain" in render_proof_trace(ok.trace)
 
 
 def test_prove_checked_preserves_induction_support() -> None:
@@ -136,7 +136,7 @@ def test_prove_checked_preserves_induction_support() -> None:
     list_scheme = get_induction_scheme(engine, "list")
     assert list_scheme is not None
 
-    ok, cert = prove_checked(
+    ok = prove_checked(
         Clause((), eq(append(xs, nil), xs)),
         engine,
         depth=10,
@@ -144,6 +144,6 @@ def test_prove_checked_preserves_induction_support() -> None:
         scheme=list_scheme,
         induction_depth=1,
     )
-    assert ok and cert is not None
-    assert cert.step == "induction"
-    assert check_certificate(cert, engine, depth=10, induction_depth=1)
+    assert ok and ok.certificate is not None
+    assert ok.certificate.step == "induction"
+    assert check_certificate(ok.certificate, engine, depth=10, induction_depth=1)

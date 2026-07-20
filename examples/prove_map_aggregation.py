@@ -59,7 +59,7 @@ def main() -> None:
 
     print("Theorem 1: sum_entries(put(empty, k, n)) = n  (single entry sum)")
     goal1 = Clause((), eq(sum_entries(put(empty, k, n)), n), ())
-    ok1, trace1 = prove_with_trace(goal1, engine, depth=8)
+    ok1 = prove(goal1, engine, depth=8)
     print(f"  Proved: {ok1}")
     if ok1:
         print(f"  Simplified to: {goal1.goal} -> true")
@@ -77,7 +77,7 @@ def main() -> None:
         ),
         (),
     )
-    ok2, trace2 = prove_with_trace(goal2, engine, depth=10)
+    ok2 = prove(goal2, engine, depth=10)
     print(f"  Proved: {ok2}")
     print()
 
@@ -103,7 +103,7 @@ def main() -> None:
         eq(sum_entries(put(put(m, k2, n2), k1, n1)), add(n1, add(n2, sum_entries(m)))),
         (),
     )
-    ok4, trace4 = prove_with_trace(goal4, engine, depth=12)
+    ok4 = prove(goal4, engine, depth=12)
     print(f"  Proved: {ok4}")
     print()
 

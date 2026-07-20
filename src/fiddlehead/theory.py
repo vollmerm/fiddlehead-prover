@@ -693,21 +693,17 @@ def _clone_theorem_environment(
 
 
 def _clone_engine_for_theory_preflight(engine: Engine) -> Engine:
-    cloned_config = EngineConfig(
-        precedence=dict(engine.config.precedence),
-        assoc=set(engine.config.assoc),
-        comm=set(engine.config.comm),
-    )
+    # make_engine copies every input except ground_cache, which we isolate.
     cloned = make_engine(
-        rules=list(engine.rules),
+        rules=engine.rules,
         ctx=engine.ctx,
         fuel=engine.fuel,
-        config=cloned_config,
+        config=engine.config,
         ground_cache={},
-        schemes=dict(engine.schemes),
-        sort_signatures=dict(engine.sort_signatures),
-        sort_arities=dict(engine.sort_arities),
-        installed_theories=dict(engine.installed_theories),
+        schemes=engine.schemes,
+        sort_signatures=engine.sort_signatures,
+        sort_arities=engine.sort_arities,
+        installed_theories=engine.installed_theories,
     )
     cloned.theory = _clone_theorem_environment(cloned, engine.theory)
     return cloned
@@ -1209,7 +1205,7 @@ def register_int_lemmas(
 
     registered: list[str] = []
     for name, clause, var, scheme in lemmas_defs:
-        ok, cert = prove_checked(
+        result = prove_checked(
             clause,
             engine,
             depth=depth,
@@ -1217,10 +1213,10 @@ def register_int_lemmas(
             scheme=scheme,
             induction_depth=induction_depth,
         )
-        if not ok or cert is None:
-            raise RuntimeError(f"Failed to prove lemma: {name}")
+        if result.certificate is None:
+            raise RuntimeError(f"Failed to prove lemma: {name} ({result.reason})")
 
-        lemma = Lemma(name=name, clause=clause, certificate=cert)
+        lemma = Lemma(name=name, clause=clause, certificate=result.certificate)
         env.register_lemma(lemma, depth=depth, induction_depth=induction_depth)
         env.register_lemma_rewrite(name, scope=scope, orientation="auto")
         registered.append(name)

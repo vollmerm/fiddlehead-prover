@@ -45,7 +45,7 @@ def _prove_rewrite(
     print(f"\n=== {theorem_name} ===")
     print(statement)
     print("Proof by rewriting\n")
-    ok, _trace = prove_with_trace(goal, engine, depth=depth)
+    ok = prove(goal, engine, depth=depth)
     print(f"Proved: {ok}")
     if ok:
         print(f"Simplified to: {goal.goal} -> true")
@@ -65,7 +65,7 @@ def _prove_hoare(
     print(statement)
     print("Hoare-style proof by rewriting Hoare judgments\n")
     if goal.assumptions or goal.disequalities:
-        ok, _trace = prove_with_trace(goal, engine, depth=depth)
+        ok = prove(goal, engine, depth=depth)
     else:
         ok = engine.normalize(goal.goal) == Const("true")
     print(f"Proved: {ok}")

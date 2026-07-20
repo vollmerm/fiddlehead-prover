@@ -203,7 +203,7 @@ Intuition:
 The script uses:
 
 ```python
-ok, trace = prove_with_trace(goal, engine, depth=...)
+result = prove(goal, engine, depth=...)
 ```
 
 For this Hoare theorem, the helper prints whether the Hoare judgment simplified
@@ -223,7 +223,7 @@ to see where rewriting got stuck.
 
 The tutorial example also shows the same Hoare theorem proved step by step with
 `ProofSession`. This is useful when you want to see each rewrite explicitly
-instead of letting `prove_with_trace(...)` do everything at once.
+instead of letting `prove(...)` do everything at once.
 
 Start by creating a session and activating the Hoare theory scope:
 

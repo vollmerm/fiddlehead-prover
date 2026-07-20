@@ -506,31 +506,31 @@ def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
     ys = V("ys", "List")
     zs = V("zs", "List")
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
-    ok_trace, ptrace = prove_with_trace(
+    ok_trace = prove(
         assoc_goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
     )
     assert ok_trace
-    rendered = render_proof_trace(ptrace)
+    rendered = render_proof_trace(ok_trace.trace)
     assert "induction" in rendered
     assert "scheme=list" in rendered
     assert "induction-branch" in rendered
 
     clause4 = Clause((), eq(add(x, zero), x))
-    ok_cert, cert = prove_checked(
+    ok_cert = prove_checked(
         clause4, engine, depth=8, var=x, scheme=nat_scheme, induction_depth=1
     )
-    assert ok_cert and cert is not None
-    assert check_certificate(cert, engine, depth=8, induction_depth=1)
+    assert ok_cert and ok_cert.certificate is not None
+    assert check_certificate(ok_cert.certificate, engine, depth=8, induction_depth=1)
 
     bad_cert = ProofCertificate(
-        clause=cert.clause,
+        clause=ok_cert.certificate.clause,
         simplified=Clause(
-            cert.simplified.assumptions, false, cert.simplified.disequalities
+            ok_cert.certificate.simplified.assumptions, false, ok_cert.certificate.simplified.disequalities
         ),
-        step=cert.step,
-        children=cert.children,
-        var=cert.var,
-        scheme_name=cert.scheme_name,
+        step=ok_cert.certificate.step,
+        children=ok_cert.certificate.children,
+        var=ok_cert.certificate.var,
+        scheme_name=ok_cert.certificate.scheme_name,
     )
     assert not check_certificate(bad_cert, engine, depth=8, induction_depth=1)
 
@@ -542,7 +542,7 @@ def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
             sess.exact()
     assert sess.qed()
 
-    lemma = Lemma("add_right_id", clause4, cert)
+    lemma = Lemma("add_right_id", clause4, ok_cert.certificate)
     sess2 = ProofSession(
         Clause((), eq(add(App("S", zero), zero), App("S", zero))), engine
     )
@@ -553,11 +553,11 @@ def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
         sess2.exact()
     assert sess2.qed()
 
-    ok_assoc_cert, assoc_cert = prove_checked(
+    ok_assoc_cert = prove_checked(
         assoc_goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
     )
-    assert ok_assoc_cert and assoc_cert is not None
-    cert_trace = certificate_to_proof_trace(assoc_cert)
+    assert ok_assoc_cert and ok_assoc_cert.certificate is not None
+    cert_trace = certificate_to_proof_trace(ok_assoc_cert.certificate)
     cert_rendered = render_proof_trace(cert_trace)
     assert "checked-induction" in cert_rendered
     assert "checked-simplify" in cert_rendered
@@ -567,7 +567,7 @@ def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
     assert "session-simp" in sess_trace_rendered
     assert "session-exact" in sess_trace_rendered
 
-    waterfall_rendered = render_waterfall_trace(ptrace)
+    waterfall_rendered = render_waterfall_trace(ok_trace.trace)
     assert "simplify" in waterfall_rendered
     assert "induct" in waterfall_rendered
     assert "branch" in waterfall_rendered
@@ -609,7 +609,7 @@ def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
     assert auto_rule_session.current_goal().goal == zero
 
     scoped_clause = Clause((), eq(app(xs, nil), xs))
-    ok_scoped_cert, scoped_cert = prove_checked(
+    ok_scoped_cert = prove_checked(
         scoped_clause,
         scoped_engine,
         depth=10,
@@ -617,8 +617,8 @@ def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
         scheme=scoped_list,
         induction_depth=1,
     )
-    assert ok_scoped_cert and scoped_cert is not None
-    scoped_lemma = Lemma("append_right_id_scoped", scoped_clause, scoped_cert)
+    assert ok_scoped_cert and ok_scoped_cert.certificate is not None
+    scoped_lemma = Lemma("append_right_id_scoped", scoped_clause, ok_scoped_cert.certificate)
     scoped_theory.register_lemma(scoped_lemma, depth=10, induction_depth=1)
     scoped_theory.register_lemma_rewrite(
         "append_right_id_scoped", scope="list_scope", orientation="auto"
@@ -711,9 +711,9 @@ def test_theorem_scopes_and_tactics(env) -> None:  # type: ignore
         )
 
     reflexive_clause = Clause((), eq(add(x, env["y"]), add(x, env["y"])))
-    ok_refl, refl_cert = prove_checked(reflexive_clause, env["engine"], depth=6)
-    assert ok_refl and refl_cert is not None
-    refl_lemma = Lemma("add_refl", reflexive_clause, refl_cert)
+    ok_refl = prove_checked(reflexive_clause, env["engine"], depth=6)
+    assert ok_refl and ok_refl.certificate is not None
+    refl_lemma = Lemma("add_refl", reflexive_clause, ok_refl.certificate)
     scoped_theory.register_lemma(refl_lemma, depth=6, induction_depth=1)
     with pytest.raises(ValueError):
         scoped_theory.register_lemma_rewrite(
@@ -1409,7 +1409,8 @@ def test_contradiction_pruning(env) -> None:  # type: ignore
 
     no_contradiction = Clause((), eq(x, y), ((x, z),))
     result = prove(no_contradiction, engine, depth=5)
-    assert result is False
+    assert not result
+    assert result.reason is not None
 
     complex_clause = Clause(((y, z),), eq(x, y), ((x, z),))
     assert not prove(complex_clause, engine, depth=5)
@@ -1457,3 +1458,54 @@ def test_prove_raises_on_bad_induction_requests() -> None:
     nat_scheme = get_induction_scheme(engine, "nat")
     with pytest.raises(ValueError, match="without var"):
         prove(goal, engine, scheme=nat_scheme)
+
+
+def test_proof_result_diagnostics() -> None:
+    reset_var_interner()
+    engine = make_engine(rules=builtin_rules())
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    x = V("pr_x", "Nat")
+    goal = Clause((), App("eq", App("add", x, Const("0")), x))
+
+    result = prove(goal, engine, var=x)
+    assert result and result.ok
+    assert result.reason is None
+    assert "add" in render_proof_trace(result.trace)
+
+    exhausted = prove(goal, engine, var=x, depth=0)
+    assert not exhausted
+    assert "depth exhausted" in (exhausted.reason or "")
+
+    unprovable = prove(Clause((), App("eq", Const("0"), App("S", Const("0")))), engine)
+    assert not unprovable
+    assert unprovable.reason is not None
+    assert "depth exhausted" not in unprovable.reason
+
+    checked = prove_checked(goal, engine, var=x)
+    assert checked and checked.certificate is not None
+    assert check_certificate(checked.certificate, engine)
+    assert "checked-" in render_proof_trace(checked.trace)
+
+
+def test_make_engine_copies_inputs() -> None:
+    reset_var_interner()
+    cfg = default_engine_config()
+    schemes: Dict[str, InductionScheme] = {}
+    sigs = default_sort_signatures()
+    e1 = make_engine(rules=builtin_rules(), config=cfg, schemes=schemes, sort_signatures=sigs)
+    e2 = make_engine(rules=builtin_rules(), config=cfg, schemes=schemes, sort_signatures=sigs)
+    install_theory(e1, nat_theory(), activate_scopes=True)
+
+    # Installing into e1 must not leak into e2 or the caller's objects.
+    assert "add" not in cfg.precedence and "add" not in cfg.assoc
+    assert "add" not in e2.config.precedence and "add" not in e2.config.assoc
+    assert schemes == {} and e2.schemes == {}
+    assert "add" not in sigs and "add" not in e2.sort_signatures
+
+    # ground_cache is the documented exception: shared by reference.
+    cache: Dict[Term, Term] = {}
+    e3 = make_engine(rules=builtin_rules(), ground_cache=cache)
+    install_theory(e3, nat_theory(), activate_scopes=True)
+    t = App("add", Const("0"), Const("0"))
+    normalize(t, e3)
+    assert t in cache

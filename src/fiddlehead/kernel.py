@@ -813,20 +813,35 @@ def make_engine(
     sort_arities: Optional[Dict[str, int]] = None,
     installed_theories: Optional[Dict[str, str]] = None,
 ) -> Engine:
-    """Construct an ``Engine`` with explicit shared/per-run dependencies."""
+    """Construct an ``Engine``.
 
-    cfg = default_engine_config() if config is None else config
+    Every input is copied, so engines never share mutable state — installing
+    a theory into one engine cannot affect another built from the same
+    arguments. Two deliberate exceptions are shared by reference:
+    ``ground_cache`` (pass one dict to several engines to reuse normalized
+    ground terms) and ``trace`` (an output sink for rewrite steps).
+    """
+
+    cfg = (
+        default_engine_config()
+        if config is None
+        else EngineConfig(
+            precedence=dict(config.precedence),
+            assoc=set(config.assoc),
+            comm=set(config.comm),
+        )
+    )
     sigs = (
         default_sort_signatures() if sort_signatures is None else dict(sort_signatures)
     )
     return Engine(
-        rules=rules,
+        rules=list(rules),
         ctx=ctx,
         trace=trace,
         fuel=fuel,
         config=cfg,
         ground_cache={} if ground_cache is None else ground_cache,
-        schemes={} if schemes is None else schemes,
+        schemes={} if schemes is None else dict(schemes),
         sort_signatures=sigs,
         sort_arities={} if sort_arities is None else dict(sort_arities),
         installed_theories={}

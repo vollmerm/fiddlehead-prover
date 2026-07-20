@@ -26,7 +26,7 @@ def main() -> None:
     nat_scheme = get_induction_scheme(engine, "nat")
     assert nat_scheme is not None
 
-    ok, trace = prove_with_trace(
+    ok = prove(
         goal,
         engine,
         depth=12,
@@ -35,7 +35,7 @@ def main() -> None:
         induction_depth=1,
     )
     assert ok
-    print(render_proof_trace(trace))
+    print(render_proof_trace(ok.trace))
 
 
 if __name__ == "__main__":

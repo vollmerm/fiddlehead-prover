@@ -18,8 +18,9 @@ Most example scripts follow the same pattern:
 2. Create an engine with `make_engine(rules=builtin_rules())`.
 3. Install one or more theories with `install_theory(...)`.
 4. State a goal with `Clause(...)`.
-5. Prove it with `prove(...)` or `prove_with_trace(...)`, passing `var=` for
-   proofs by induction.
+5. Prove it with `prove(...)`, passing `var=` for proofs by induction. The
+   returned `ProofResult` is truthy on success and carries `trace` and
+   `reason` for diagnostics.
 
 Calling `reset_var_interner()` first is optional; it clears remembered
 variable sorts when unrelated proof scripts share one interpreter.
@@ -83,6 +84,11 @@ engine = make_engine(rules=builtin_rules())
 ```
 
 For simple proofs, this is usually all you need.
+
+Every input is copied, so two engines built from the same config or scheme
+dicts never affect each other. The exceptions are `ground_cache` and `trace`,
+which are shared by reference on purpose: pass one `ground_cache` dict to
+several engines to reuse normalized ground terms across proof runs.
 
 ## Loading theories
 
@@ -164,31 +170,31 @@ useful when a goal only reduces after you add local case information.
 ### `prove(clause, engine, ...)`
 
 Attempts to prove a clause with the default waterfall search and returns a
-boolean.
+`ProofResult`. The result is truthy exactly when the proof succeeded, so
+`assert prove(...)` and `if prove(...)` work as before.
 
 ```python
-assert prove(Clause((), eq(zero, zero)), engine, depth=4)
+result = prove(Clause((), eq(zero, zero)), engine, depth=4)
+assert result
 ```
 
-Use this when you want the default automation but do not need a trace.
-
-### `prove_with_trace(clause, engine, ...)`
-
-Runs the same waterfall search and returns `(ok, trace)`.
+Every result carries the search tree in `result.trace`, and failed results
+explain themselves in `result.reason` — in particular, running out of search
+depth is reported distinctly from a goal the prover simply could not solve:
 
 ```python
-ok, trace = prove_with_trace(goal, engine, depth=12)
+result = prove(hard_goal, engine, depth=2)
+if not result:
+    print(result.reason)  # e.g. "search depth exhausted (depth=2); ..."
+    print(render_proof_trace(result.trace))
 ```
-
-If induction is needed, pass `var=...`, `scheme=...`, and `induction_depth=...`
-the way the arithmetic and list examples do.
 
 ### `render_waterfall_trace(trace)`
 
-Renders the trace in a stage-oriented view.
+Renders a trace in a stage-oriented view.
 
 ```python
-print(render_waterfall_trace(trace))
+print(render_waterfall_trace(result.trace))
 ```
 
 This is especially useful when you want to see where the prover simplified,
@@ -196,10 +202,10 @@ forward-chained, split branches, generalized, or introduced induction.
 
 ### `render_proof_trace(trace)`
 
-Turns the returned trace into a readable proof tree.
+Turns a trace into a readable proof tree.
 
 ```python
-print(render_proof_trace(trace))
+print(render_proof_trace(result.trace))
 ```
 
 ### `get_induction_scheme(engine, name)`
@@ -215,28 +221,29 @@ assert list_scheme is not None
 
 ### `prove(clause, engine, var=..., ...)` — proofs by induction
 
-Passing `var=` to `prove` (or `prove_with_trace`) proves the clause by
-induction on that variable. The scheme is looked up from the variable's sort;
-pass `scheme=` or `scheme_name=` to override.
+Passing `var=` to `prove` proves the clause by induction on that variable.
+The scheme is looked up from the variable's sort; pass `scheme=` or
+`scheme_name=` to override.
 
 ```python
 assert prove(goal, engine, var=x, depth=8, induction_depth=1)
 ```
 
-Invalid induction requests raise `ValueError` instead of returning `False`:
+Invalid induction requests raise `ValueError` instead of failing silently:
 an unknown scheme name, a variable whose sort has no registered scheme, a
 variable/scheme sort mismatch, or a variable that does not occur in the
-clause. A plain `False` therefore always means the search itself failed —
-try a larger `depth` or inspect the trace.
+clause. A falsy result therefore always means the search itself failed —
+check `result.reason` and `result.trace`.
 
 ### `prove_checked(clause, engine, ...)`
 
-Runs the same waterfall-backed search but returns a certificate as well.
+Runs the same waterfall-backed search but records a checked certificate,
+available as `result.certificate` on success.
 
 ```python
-ok, cert = prove_checked(goal, engine, depth=8, var=x, scheme=nat_scheme)
-assert ok and cert is not None
-assert check_certificate(cert, engine, depth=8, induction_depth=1)
+result = prove_checked(goal, engine, depth=8, var=x, scheme=nat_scheme)
+assert result and result.certificate is not None
+assert check_certificate(result.certificate, engine, depth=8, induction_depth=1)
 ```
 
 Certificate checking replays the same kind of proof steps that ordinary proof
@@ -305,34 +312,24 @@ ys = V("ys", "List")
 zs = V("zs", "List")
 
 engine = make_engine(rules=builtin_rules())
-install_theory(engine, list_theory(), activate_scopes=True)
-
-scheme = get_induction_scheme(engine, "list")
-assert scheme is not None
+install_theory(engine, list_theory())
 
 goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
-ok, trace = prove_with_trace(
-    goal,
-    engine,
-    depth=12,
-    var=xs,
-    scheme=scheme,
-    induction_depth=1,
-)
-assert ok
-print(render_proof_trace(trace))
+result = prove(goal, engine, var=xs)
+assert result
+print(render_proof_trace(result.trace))
 ```
 
 ## How the example scripts map to the API
 
 | Example | Main APIs to look at |
 | --- | --- |
-| `prove_add_associativity.py` | `V`, `Const`, `App`, `Clause`, `make_engine`, `install_theory`, `get_induction_scheme`, `prove_with_trace` |
-| `prove_int_ring_basics.py` | `int_theory`, AC-based proving with `prove_with_trace`, and contextual equalities via `Clause(assumptions=...)` |
-| `prove_append_associativity.py` | `V`, `App`, `Clause`, `list_theory`, `prove_with_trace`, `render_proof_trace` |
+| `prove_add_associativity.py` | `V`, `Const`, `App`, `Clause`, `make_engine`, `install_theory`, `prove`, `render_proof_trace` |
+| `prove_int_ring_basics.py` | `int_theory`, AC-based proving with `prove`, and contextual equalities via `Clause(assumptions=...)` |
+| `prove_append_associativity.py` | `V`, `App`, `Clause`, `list_theory`, `prove`, `render_proof_trace` |
 | `prove_length_append.py` | same as above, plus installing both `nat_theory()` and `list_theory()` |
 | `prove_map_theorems.py` | `Clause(..., disequalities=...)` and `simplify_clause` |
-| `prove_map_aggregation.py` | `register_recursive_definition`, `SortSignature`, `prove_with_trace`, `prove` |
+| `prove_map_aggregation.py` | `register_recursive_definition`, `SortSignature`, `prove` |
 
 The remaining examples go a step further and extend the prover with custom sort
 signatures, rewrite rules, or induction schemes. Those are public APIs too, but
@@ -377,8 +374,8 @@ the scope the same way you manage lemma rewrites and non-recursive definitions.
 
 1. Register the symbol signature (`SortSignature`)
 2. Register recursive equations with `register_recursive_definition(...)`
-3. Prove properties of the new function with `prove(...)` and
-   `prove_with_trace(...)`
+3. Prove properties of the new function with `prove(...)`, rendering
+   `result.trace` when you want to inspect the search
 
 ## What to read next
 

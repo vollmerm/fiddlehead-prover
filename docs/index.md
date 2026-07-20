@@ -17,8 +17,6 @@ Fiddlehead works with first-order terms and equality goals:
 ```python
 from fiddlehead import *
 
-reset_var_interner()
-
 x = V("x", "Nat")
 zero = Const("0")
 S = lambda t: App("S", t)
@@ -26,11 +24,10 @@ add = lambda a, b: App("add", a, b)
 eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
-install_theory(engine, nat_theory(), activate_scopes=True)
+install_theory(engine, nat_theory())
 
 goal = Clause((), eq(add(x, zero), x))
-scheme = get_induction_scheme(engine, "nat")
-prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
+prove(goal, engine, var=x)  # induction scheme inferred from x's sort
 ```
 
 ## Installation

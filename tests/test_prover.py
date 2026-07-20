@@ -268,25 +268,25 @@ def test_induction_branches_and_proofs(env) -> None:  # type: ignore
     assert str(ih_l) == "add(x_ih_0, 0)"
     assert str(ih_r) == "x_ih_0"
 
-    assert prove_with_induction(
-        clause4, engine, x, nat_scheme, depth=8, induction_depth=1
+    assert prove(
+        clause4, engine, var=x, scheme=nat_scheme, depth=8, induction_depth=1
     )
     bad = Clause((), eq(add(zero, one), zero))
     assert not prove(bad, engine, depth=8)
-    assert not prove_with_induction(
-        clause4, engine, xs, nat_scheme, depth=8, induction_depth=1
-    )
+    with pytest.raises(ValueError, match="sort"):
+        prove(clause4, engine, var=xs, scheme=nat_scheme, depth=8, induction_depth=1)
     assert not induction_branches(clause4, xs, nat_scheme)
 
     register_induction_scheme(engine, bool_scheme)
     assert get_induction_scheme(engine, "nat") is nat_scheme
     assert get_induction_scheme_for_sort(engine, "List") is list_scheme
-    assert prove_with_registered_induction(
-        clause4, engine, x_nat, "nat", depth=8, induction_depth=1
+    assert prove(
+        clause4, engine, var=x, scheme_name="nat", depth=8, induction_depth=1
     )
-    assert not prove_with_registered_induction(
-        clause4, engine, x_nat, "list", depth=8, induction_depth=1
-    )
+    with pytest.raises(ValueError, match="does not occur"):
+        prove(clause4, engine, var=x_nat, scheme_name="nat", depth=8)
+    with pytest.raises(ValueError, match="sort"):
+        prove(clause4, engine, var=x_nat, scheme_name="list", depth=8)
 
     list_goal = Clause((), eq(app(xs, nil), xs))
     list_branches = induction_branches(list_goal, xs, list_scheme)
@@ -301,22 +301,22 @@ def test_induction_branches_and_proofs(env) -> None:  # type: ignore
     assert str(ih_l2) == "append(xs_ih_0, nil)"
     assert str(ih_r2) == "xs_ih_0"
 
-    assert prove_with_induction(
-        list_goal, engine, xs, list_scheme, depth=10, induction_depth=1
+    assert prove(
+        list_goal, engine, var=xs, scheme=list_scheme, depth=10, induction_depth=1
     )
     ys = V("ys", "List")
     zs = V("zs", "List")
     assoc_goal = Clause((), eq(app(app(xs, ys), zs), app(xs, app(ys, zs))))
-    assert prove_with_induction(
-        assoc_goal, engine, xs, list_scheme, depth=12, induction_depth=1
+    assert prove(
+        assoc_goal, engine, var=xs, scheme=list_scheme, depth=12, induction_depth=1
     )
     len_append_nil_goal = Clause((), eq(length(app(xs, nil)), length(xs)))
-    assert prove_with_induction(
-        len_append_nil_goal, engine, xs, list_scheme, depth=12, induction_depth=1
+    assert prove(
+        len_append_nil_goal, engine, var=xs, scheme=list_scheme, depth=12, induction_depth=1
     )
     len_append_goal = Clause((), eq(length(app(xs, ys)), add(length(xs), length(ys))))
-    assert prove_with_induction(
-        len_append_goal, engine, xs, list_scheme, depth=14, induction_depth=1
+    assert prove(
+        len_append_goal, engine, var=xs, scheme=list_scheme, depth=14, induction_depth=1
     )
 
 
@@ -387,11 +387,11 @@ def test_inductive_repeat_skip_exec_proves() -> None:
 
     nat_scheme = get_induction_scheme(engine, "nat")
     assert nat_scheme is not None
-    assert prove_with_induction(
+    assert prove(
         goal,
         engine,
-        n,
-        nat_scheme,
+        var=n,
+        scheme=nat_scheme,
         depth=20,
         induction_depth=2,
         generalize=False,
@@ -464,7 +464,7 @@ def test_cache_and_config_isolation(env) -> None:  # type: ignore
     assert str(normalize(add(y, add(x, z)), engine)) == "add(x, add(y, z))"
 
 
-def test_variable_interning_and_sort_conflicts() -> None:
+def test_variable_interning_and_redeclaration() -> None:
     reset_var_interner()
     vx1 = V("vx")
     vx2 = V("vx")
@@ -473,15 +473,19 @@ def test_variable_interning_and_sort_conflicts() -> None:
     vn2 = V("vn", "Nat")
     assert vn1 is vn2
 
-    reset_var_interner()
-    _ = V("u")
-    with pytest.raises(ValueError):
-        V("u", "Nat")
+    # Bare V(name) inherits the most recently declared sort for that name.
+    assert V("vn") is vn1
 
+    # Redeclaring with a different sort replaces the recorded variable
+    # (notebook cell re-runs) without touching previously built terms.
     reset_var_interner()
-    _ = V("u", "Nat")
-    with pytest.raises(ValueError):
-        V("u", "List")
+    u_plain = V("u")
+    u_nat = V("u", "Nat")
+    assert u_nat.sort == "Nat"
+    assert u_plain.sort is None
+    assert V("u") is u_nat
+    u_list = V("u", "List")
+    assert V("u") is u_list
 
 
 def test_traces_certificates_and_sessions(env) -> None:  # type: ignore
@@ -954,15 +958,15 @@ def test_typing_theories_and_installation(env) -> None:  # type: ignore
         )
 
     mul_zero_goal = Clause((), App("eq", mul(x_nat, zero), zero))
-    assert prove_with_registered_induction(
-        mul_zero_goal, engine, x_nat, "nat", depth=12, induction_depth=1
+    assert prove(
+        mul_zero_goal, engine, var=x_nat, scheme_name="nat", depth=12, induction_depth=1
     )
     y_nat = V("y_nat", "Nat")
     mul_succ_goal = Clause(
         (), App("eq", mul(x_nat, App("S", y_nat)), add(x_nat, mul(x_nat, y_nat)))
     )
-    assert prove_with_registered_induction(
-        mul_succ_goal, engine, x_nat, "nat", depth=16, induction_depth=1
+    assert prove(
+        mul_succ_goal, engine, var=x_nat, scheme_name="nat", depth=16, induction_depth=1
     )
 
     assert normalize(bnot(true), engine) == false
@@ -985,8 +989,8 @@ def test_typing_theories_and_installation(env) -> None:  # type: ignore
             bor(bnot(x_bool), bnot(y_bool)),
         ),
     )
-    assert prove_with_registered_induction(
-        demorgan_goal, engine, x_bool, "bool", depth=12, induction_depth=1
+    assert prove(
+        demorgan_goal, engine, var=x_bool, scheme_name="bool", depth=12, induction_depth=1
     )
 
     core_config = default_engine_config()
@@ -1202,13 +1206,13 @@ def test_int_theory_induction() -> None:
     assert scheme.name == "int"
 
     neg_involutive = Clause((), eq(zneg(zneg(x)), x))
-    assert prove_with_induction(
-        neg_involutive, engine, x, scheme, depth=12, induction_depth=2
+    assert prove(
+        neg_involutive, engine, var=x, scheme=scheme, depth=12, induction_depth=2
     )
 
     add_zero_r = Clause((), eq(zadd(x, z0), x))
-    assert prove_with_induction(
-        add_zero_r, engine, x, scheme, depth=12, induction_depth=2
+    assert prove(
+        add_zero_r, engine, var=x, scheme=scheme, depth=12, induction_depth=2
     )
 
 
@@ -1409,3 +1413,47 @@ def test_contradiction_pruning(env) -> None:  # type: ignore
 
     complex_clause = Clause(((y, z),), eq(x, y), ((x, z),))
     assert not prove(complex_clause, engine, depth=5)
+
+
+def test_install_theory_is_idempotent() -> None:
+    reset_var_interner()
+    engine = make_engine(rules=builtin_rules())
+    first = install_theory(engine, nat_theory(), activate_scopes=True)
+    second = install_theory(engine, nat_theory(), activate_scopes=True)
+    assert first == second
+    x = V("idem_x", "Nat")
+    goal = Clause((), App("eq", App("add", x, Const("0")), x))
+    assert prove(goal, engine, var=x)
+
+    with pytest.raises(ValueError, match="version"):
+        install_theory(engine, nat_theory(version="2.0.0"))
+
+
+def test_prove_raises_on_bad_induction_requests() -> None:
+    reset_var_interner()
+    engine = make_engine(rules=builtin_rules())
+    install_theory(engine, nat_theory(), activate_scopes=True)
+    x = V("req_x", "Nat")
+    goal = Clause((), App("eq", App("add", x, Const("0")), x))
+
+    # Scheme inferred from the variable's sort.
+    assert prove(goal, engine, var=x)
+
+    # Sort with no registered scheme (e.g. a case typo) raises.
+    typo = V("req_t", "nat")
+    typo_goal = Clause((), App("eq", App("add", typo, Const("0")), typo))
+    with pytest.raises(ValueError, match="No induction scheme"):
+        prove(typo_goal, engine, var=typo)
+
+    # Unknown scheme name raises.
+    with pytest.raises(ValueError, match="Unknown induction scheme"):
+        prove(goal, engine, var=x, scheme_name="lists")
+
+    # Induction variable absent from the clause raises.
+    with pytest.raises(ValueError, match="does not occur"):
+        prove(goal, engine, var=V("req_z", "Nat"))
+
+    # A scheme without a variable raises.
+    nat_scheme = get_induction_scheme(engine, "nat")
+    with pytest.raises(ValueError, match="without var"):
+        prove(goal, engine, scheme=nat_scheme)

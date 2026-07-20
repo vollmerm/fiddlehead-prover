@@ -89,11 +89,11 @@ def _prove_induction(
     print(f"\n=== {theorem_name} ===")
     print(statement)
     print(f"Proof by induction on {var.name}\n")
-    ok = prove_with_induction(
+    ok = prove(
         goal,
         engine,
-        var,
-        scheme,
+        var=var,
+        scheme=scheme,
         depth=depth,
         induction_depth=induction_depth,
     )

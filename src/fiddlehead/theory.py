@@ -24,7 +24,6 @@ from .kernel import (
     TypeVar,
     _decreases,
     get_induction_scheme,
-    get_induction_scheme_for_sort,
     int_induction_scheme,
     list_induction_scheme,
     make_engine,
@@ -32,7 +31,6 @@ from .kernel import (
     register_induction_scheme,
     register_sort_signature,
     tree_induction_scheme,
-    var_matches_scheme,
 )
 from .proof import (
     Clause,
@@ -594,13 +592,11 @@ def _check_theory_install_conflicts(
     install_scope: str,
 ) -> None:
     installed_version = engine.installed_theories.get(theory.name)
-    if installed_version is not None:
-        if installed_version != theory.version:
-            raise ValueError(
-                f"Theory {theory.name} already installed at version {installed_version}; "
-                f"cannot install incompatible version {theory.version}."
-            )
-        raise ValueError(f"Theory {theory.name}@{theory.version} is already installed.")
+    if installed_version is not None and installed_version != theory.version:
+        raise ValueError(
+            f"Theory {theory.name} already installed at version {installed_version}; "
+            f"cannot install incompatible version {theory.version}."
+        )
 
     for dep_spec in theory.depends_on:
         dep_name, dep_minimum = _parse_dependency_spec(dep_spec)
@@ -767,7 +763,22 @@ def _install_theory_impl(
 def install_theory(
     engine: Engine, theory: Theory, activate_scopes: bool = True
 ) -> Tuple[str, ...]:
-    """Install a theory with conflict preflight, then mutate the real engine."""
+    """Install a theory with conflict preflight, then mutate the real engine.
+
+    Reinstalling the same theory version is a no-op (the requested scopes are
+    re-activated), so scripts and notebook cells can be re-run safely.
+    Installing a different version of an already-installed theory raises.
+    """
+
+    if engine.installed_theories.get(theory.name) == theory.version:
+        env = get_theorem_environment(engine)
+        scopes = (f"theory:{theory.name}", *theory.default_scopes)
+        deduped = tuple(dict.fromkeys(scopes))
+        if activate_scopes:
+            for scope in deduped:
+                if scope in env.scoped_rule_sets:
+                    env.activate_scope(scope)
+        return deduped
 
     preflight = _clone_engine_for_theory_preflight(engine)
     _install_theory_impl(preflight, theory, activate_scopes=activate_scopes)
@@ -783,28 +794,6 @@ def _contains_symbol(term: Term, symbol: str) -> bool:
                 return True
             return any(_contains_symbol(arg, symbol) for arg in term.args)
     raise TypeError(f"Unsupported term type: {type(term)!r}")
-
-
-def _select_induction_scheme(
-    engine: Engine,
-    var: Var,
-    scheme: Optional[InductionScheme] = None,
-    scheme_name: Optional[str] = None,
-) -> InductionScheme:
-    chosen = scheme
-    if chosen is None and scheme_name is not None:
-        chosen = get_induction_scheme(engine, scheme_name)
-    if chosen is None and var.sort is not None:
-        chosen = get_induction_scheme_for_sort(engine, var.sort)
-    if chosen is None:
-        raise ValueError(
-            "No induction scheme provided and no scheme found for variable sort."
-        )
-    if not var_matches_scheme(var, chosen):
-        raise ValueError(
-            f"Variable {var.name} is incompatible with induction scheme {chosen.name}."
-        )
-    return chosen
 
 
 def _orient_equality_as_rewrite(
@@ -1183,10 +1172,6 @@ def register_int_lemmas(
     Requires ``nat_theory`` and ``int_theory`` already installed.
     Returns the list of registered lemma names.
     """
-    from .syntax import reset_var_interner
-
-    reset_var_interner()
-
     env = get_theorem_environment(engine)
     x = V("il_x", "Int")
     y = V("il_y", "Int")

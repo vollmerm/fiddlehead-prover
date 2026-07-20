@@ -59,13 +59,13 @@ This is the standard list length append theorem.
     ok_auto = prove(goal, engine, depth=10)
     print(f"prove (basic): {ok_auto}")
 
-    from fiddlehead import prove_with_induction, get_induction_scheme
+    from fiddlehead import get_induction_scheme
 
     list_scheme = get_induction_scheme(engine, "list")
-    ok_induct = prove_with_induction(
-        goal, engine, xs, list_scheme, depth=12, induction_depth=1
+    ok_induct = prove(
+        goal, engine, var=xs, scheme=list_scheme, depth=12, induction_depth=1
     )
-    print(f"prove_with_induction: {ok_induct}")
+    print(f"prove with induction: {ok_induct}")
 
     print("\n=== Manual proof with ProofSession ===\n")
 

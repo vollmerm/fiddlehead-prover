@@ -36,7 +36,7 @@ from fiddlehead.prover import (
     list_theory,
     make_engine,
     nat_theory,
-    prove_with_induction,
+    prove,
     register_sort_signature,
     reset_var_interner,
 )
@@ -569,8 +569,8 @@ class TestDestructorElimIntegration:
         list_scheme = get_induction_scheme(engine, "list")
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok = prove_with_induction(
-            goal, engine, xs, list_scheme, depth=14, destructor_elim=True
+        ok = prove(
+            goal, engine, var=xs, scheme=list_scheme, depth=14, destructor_elim=True
         )
         assert ok, "length_append should succeed with DE enabled"
 
@@ -587,8 +587,8 @@ class TestDestructorElimIntegration:
         list_scheme = get_induction_scheme(engine, "list")
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok = prove_with_induction(
-            goal, engine, xs, list_scheme, depth=14, destructor_elim=False
+        ok = prove(
+            goal, engine, var=xs, scheme=list_scheme, depth=14, destructor_elim=False
         )
         assert ok, "length_append should still succeed without DE"
 
@@ -603,8 +603,8 @@ class TestDestructorElimIntegration:
         list_scheme = get_induction_scheme(engine, "list")
         goal = Clause((), eq(append(xs, nil), xs))
 
-        ok = prove_with_induction(
-            goal, engine, xs, list_scheme, depth=10, destructor_elim=True
+        ok = prove(
+            goal, engine, var=xs, scheme=list_scheme, depth=10, destructor_elim=True
         )
         assert ok, "append_nil should succeed with DE enabled"
 
@@ -620,8 +620,8 @@ class TestDestructorElimIntegration:
         list_scheme = get_induction_scheme(engine, "list")
         goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
 
-        ok = prove_with_induction(
-            goal, engine, xs, list_scheme, depth=15, destructor_elim=True
+        ok = prove(
+            goal, engine, var=xs, scheme=list_scheme, depth=15, destructor_elim=True
         )
         assert ok, "append_assoc should succeed with DE enabled"
 
@@ -664,7 +664,7 @@ class TestFertilizeIntegration:
         nat_scheme = get_induction_scheme(engine, "nat")
         goal = Clause((), eq(add(n, m), add(m, n)))
 
-        ok = prove_with_induction(goal, engine, n, nat_scheme, depth=10)
+        ok = prove(goal, engine, var=n, scheme=nat_scheme, depth=10)
         assert ok, "add_comm should succeed"
 
     def test_fertilize_does_not_break_length_append(self, fert_env: dict) -> None:
@@ -680,7 +680,7 @@ class TestFertilizeIntegration:
         list_scheme = get_induction_scheme(engine, "list")
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok = prove_with_induction(goal, engine, xs, list_scheme, depth=14)
+        ok = prove(goal, engine, var=xs, scheme=list_scheme, depth=14)
         assert ok, "length_append should succeed"
 
     def test_fertilize_clause_on_already_solved_clause(self, fert_env: dict) -> None:

@@ -77,7 +77,9 @@ _engine_interner: ContextVar[Optional[Dict[Tuple[str, Optional[str]], Var]]] = (
 def reset_var_interner() -> None:
     """Reset global variable interning state.
 
-    Useful in tests to ensure deterministic reuse and sort checks.
+    Optional: clears recorded name-to-sort associations so ``V(name)`` no
+    longer inherits a sort declared earlier in the process. Useful between
+    unrelated proof scripts sharing one interpreter.
     """
 
     _VAR_INTERN.clear()
@@ -90,8 +92,11 @@ def V(name: str, sort: Optional[str] = None) -> Var:
 
     When an engine-scoped interner is active (inside ``Engine.var_context()``),
     variables are interned per-engine. Otherwise, the shared global interner is
-    used. Variables with the same name must use the same sort annotation across a
-    run; conflicting declarations raise ``ValueError``.
+    used. Calling ``V(name)`` without a sort returns the most recently declared
+    variable for that name (sort included), so a sort only needs to be written
+    once per script. Redeclaring a name with a different sort creates a new
+    variable and makes it the one bare ``V(name)`` calls return from then on;
+    terms built with the old variable are unaffected.
     """
 
     shadow = _engine_interner.get()
@@ -105,22 +110,15 @@ def V(name: str, sort: Optional[str] = None) -> Var:
         intern[key] = v
         return v
 
-    existing_sort = _VAR_NAME_SORT.get(name)
-    if existing_sort is None and name in _VAR_NAME_SORT:
-        if sort is not None:
-            raise ValueError(
-                f"Variable '{name}' already declared with sort None; "
-                f"cannot redeclare with sort '{sort}'."
-            )
-    elif existing_sort is not None and existing_sort != sort:
-        raise ValueError(
-            f"Variable '{name}' already declared with sort '{existing_sort}'; "
-            f"cannot redeclare with sort '{sort}'."
-        )
+    if sort is None:
+        recorded_sort = _VAR_NAME_SORT.get(name)
+        if recorded_sort is not None:
+            return _VAR_INTERN[(name, recorded_sort)]
 
     key = (name, sort)
     existing = _VAR_INTERN.get(key)
     if existing is not None:
+        _VAR_NAME_SORT[name] = sort
         return existing
 
     v = Var(name, sort)

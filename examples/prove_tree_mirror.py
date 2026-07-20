@@ -73,8 +73,8 @@ def main() -> None:
     goal1 = Clause((), eq(mirror(mirror(t)), t), ())
     tree_scheme = get_induction_scheme(engine, "tree")
     assert tree_scheme is not None
-    ok1 = prove_with_induction(
-        goal1, engine, t, tree_scheme, depth=12, induction_depth=1
+    ok1 = prove(
+        goal1, engine, var=t, scheme=tree_scheme, depth=12, induction_depth=1
     )
     print(f"  Proved: {ok1}")
     print()
@@ -82,8 +82,8 @@ def main() -> None:
     print("Theorem 2: size(mirror(t)) = size(t)  (mirror preserves size)")
     print("  Proof by induction on t")
     goal2 = Clause((), eq(size(mirror(t)), size(t)), ())
-    ok2 = prove_with_induction(
-        goal2, engine, t, tree_scheme, depth=12, induction_depth=1
+    ok2 = prove(
+        goal2, engine, var=t, scheme=tree_scheme, depth=12, induction_depth=1
     )
     print(f"  Proved: {ok2}")
     print()

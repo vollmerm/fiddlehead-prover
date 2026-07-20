@@ -32,7 +32,7 @@ from .generalize import (
     generalize_clause,
     ungeneralize_clause,
 )
-from .select_induction import choose_induction_var
+from .select_induction import _vars_in_clause, choose_induction_var
 
 
 @dataclass(frozen=True)
@@ -485,150 +485,81 @@ def split_clause(clause: Clause) -> list[Clause]:
             return [clause]
 
 
-def prove(
-    clause: Clause,
-    engine: Engine,
-    depth: int = 5,
-    proof_node: Optional[ProofNode] = None,
-) -> bool:
-    """Attempt proof using the waterfall prover without explicit induction."""
-
-    return prove_with_waterfall(clause, engine, depth=depth, proof_node=proof_node)
-
-
-def prove_with_induction(
-    clause: Clause,
+def _select_induction_scheme(
     engine: Engine,
     var: Var,
-    scheme: InductionScheme,
-    depth: int = 5,
-    induction_depth: int = 1,
-    proof_node: Optional[ProofNode] = None,
-    generalize: bool = True,
-    destructor_elim: bool = True,
-) -> bool:
-    """Attempt proof using the waterfall prover with explicit induction."""
-
-    return prove_with_waterfall(
-        clause,
-        engine,
-        depth=depth,
-        var=var,
-        scheme=scheme,
-        induction_depth=induction_depth,
-        generalize=generalize,
-        destructor_elim=destructor_elim,
-        proof_node=proof_node,
-    )
-
-
-def prove_with_registered_induction(
-    clause: Clause,
-    engine: Engine,
-    var: Var,
-    scheme_name: str,
-    depth: int = 5,
-    induction_depth: int = 1,
-    proof_node: Optional[ProofNode] = None,
-    generalize: bool = True,
-) -> bool:
-    """Run induction proof using a scheme looked up by name."""
-
-    return prove_with_waterfall(
-        clause,
-        engine,
-        depth=depth,
-        var=var,
-        scheme_name=scheme_name,
-        induction_depth=induction_depth,
-        generalize=generalize,
-        proof_node=proof_node,
-    )
-
-
-def prove_with_trace(
-    clause: Clause,
-    engine: Engine,
-    depth: int = 5,
-    var: Optional[Var] = None,
     scheme: Optional[InductionScheme] = None,
     scheme_name: Optional[str] = None,
-    induction_depth: int = 1,
-    generalize: bool = True,
-) -> tuple[bool, ProofTrace]:
-    """Run proof search and return both success flag and trace tree."""
-    if var is None:
-        return prove_with_waterfall_trace(clause, engine, depth=depth)
-    if scheme is None and scheme_name is None:
-        trace = ProofTrace()
-        root = _new_node("prove", clause)
-        trace.roots.append(root)
-        root.note = "missing scheme for induction trace"
-        root.solved = False
-        return False, trace
-    return prove_with_waterfall_trace(
-        clause,
-        engine,
-        depth=depth,
-        var=var,
-        scheme=scheme,
-        scheme_name=scheme_name,
-        induction_depth=induction_depth,
-        generalize=generalize,
+) -> InductionScheme:
+    """Resolve the induction scheme for ``var``, raising on caller errors."""
+
+    chosen = scheme
+    if chosen is None and scheme_name is not None:
+        chosen = get_induction_scheme(engine, scheme_name)
+        if chosen is None:
+            raise ValueError(
+                f"Unknown induction scheme {scheme_name!r}. "
+                f"Registered schemes: {sorted(engine.schemes) or '<none>'}."
+            )
+    if chosen is None and var.sort is not None:
+        chosen = _get_scheme_for_sort(engine, var.sort)
+    if chosen is None:
+        registered = ", ".join(
+            f"{s.name!r} (sort {s.sort!r})" for s in engine.schemes.values()
+        )
+        raise ValueError(
+            f"No induction scheme found for variable {var.name!r} with sort "
+            f"{var.sort!r}. Registered schemes: {registered or '<none>'}. "
+            "Install a theory providing one, or pass scheme=/scheme_name=."
+        )
+    if not var_matches_scheme(var, chosen):
+        raise ValueError(
+            f"Induction variable {var.name!r} has sort {var.sort!r} but scheme "
+            f"{chosen.name!r} expects sort {chosen.sort!r}."
+        )
+    return chosen
+
+
+def _require_var_in_clause(clause: Clause, var: Var) -> None:
+    occurring = set(_vars_in_clause(clause))
+    if var in occurring:
+        return
+    other_sorts = sorted({repr(v.sort) for v in occurring if v.name == var.name})
+    if other_sorts:
+        raise ValueError(
+            f"Induction variable {var.name!r} with sort {var.sort!r} does not occur "
+            f"in the clause; the clause uses {var.name!r} with sort "
+            f"{', '.join(other_sorts)}. Rebuild the goal after changing a "
+            "variable's sort."
+        )
+    raise ValueError(
+        f"Induction variable {var.name!r} does not occur in the clause."
     )
 
 
-def prove_with_auto_induction(
+def _validate_induction_request(
     clause: Clause,
     engine: Engine,
-    depth: int = 5,
-    induction_depth: int = 1,
-    proof_node: Optional[ProofNode] = None,
-    generalize: bool = True,
-) -> tuple[bool, ProofTrace]:
-    """Run waterfall proof search with automatic induction variable selection."""
-    auto_var = choose_induction_var(clause, engine)
-    sort = auto_var.sort
-    if sort is None:
-        raise ValueError(
-            f"Cannot auto-select induction scheme for variable {auto_var.name}: "
-            f"sort is None. Ensure the variable has a declared sort."
-        )
-    auto_scheme = get_induction_scheme(engine, sort + "-induction")
-    if auto_scheme is None:
-        auto_scheme = _get_scheme_for_sort(engine, sort)
-    if auto_scheme is None:
-        raise ValueError(
-            f"Cannot auto-select induction scheme for variable {auto_var.name} "
-            f"with sort {auto_var.sort}. Ensure a scheme is registered."
-        )
+    var: Optional[Var],
+    scheme: Optional[InductionScheme],
+    scheme_name: Optional[str],
+    auto_induction: bool,
+) -> Optional[InductionScheme]:
+    """Check explicit induction arguments up front so mistakes raise instead of
+    silently proving nothing. Returns the resolved scheme when ``var`` is given."""
 
-    trace = ProofTrace()
-    root = proof_node if proof_node is not None else _new_node("prove", clause)
-    if proof_node is None:
-        trace.roots.append(root)
-
-    auto_node = _new_node(
-        "auto-induction-select",
-        clause,
-        note=f"auto-selected var={auto_var.name} with scheme={auto_scheme.name}",
-    )
-    root.children.append(auto_node)
-    root.solved = None
-
-    success = prove_with_waterfall(
-        clause,
-        engine,
-        depth=depth,
-        var=auto_var,
-        scheme=auto_scheme,
-        induction_depth=induction_depth,
-        generalize=generalize,
-        auto_induction=False,
-        proof_node=auto_node,
-    )
-    root.solved = success
-    return success, trace
+    if var is None:
+        if (scheme is not None or scheme_name is not None) and not auto_induction:
+            raise ValueError(
+                "An induction scheme was provided without var=; pass the "
+                "induction variable as well."
+            )
+        if auto_induction:
+            choose_induction_var(clause, engine)
+        return None
+    chosen = _select_induction_scheme(engine, var, scheme, scheme_name)
+    _require_var_in_clause(clause, var)
+    return chosen
 
 
 def _resolve_waterfall_induction_target(
@@ -864,10 +795,10 @@ def _prove_with_waterfall_impl(
     return False
 
 
-def prove_with_waterfall(
+def prove(
     clause: Clause,
     engine: Engine,
-    depth: int = 5,
+    depth: int = 12,
     var: Optional[Var] = None,
     scheme: Optional[InductionScheme] = None,
     scheme_name: Optional[str] = None,
@@ -877,18 +808,18 @@ def prove_with_waterfall(
     auto_induction: bool = False,
     proof_node: Optional[ProofNode] = None,
 ) -> bool:
-    """Run proof search through an explicit waterfall of proof stages."""
+    """Prove a clause with the waterfall search.
 
-    chosen_scheme = scheme
-    if chosen_scheme is None and scheme_name is not None:
-        chosen_scheme = get_induction_scheme(engine, scheme_name)
-    if var is not None and chosen_scheme is not None and not var_matches_scheme(
-        var, chosen_scheme
-    ):
-        if proof_node is not None:
-            proof_node.solved = False
-            proof_node.note = f"sort mismatch for scheme {chosen_scheme.name}"
-        return False
+    Pass ``var=`` to prove by induction on that variable; the scheme is looked
+    up from the variable's sort unless ``scheme=`` or ``scheme_name=`` is given.
+    Pass ``auto_induction=True`` to let the prover pick the variable. Invalid
+    induction requests (unknown scheme, sort mismatch, variable not in the
+    clause) raise ``ValueError`` rather than returning ``False``.
+    """
+
+    chosen_scheme = _validate_induction_request(
+        clause, engine, var, scheme, scheme_name, auto_induction
+    )
     with engine.var_context():
         return _prove_with_waterfall_impl(
             clause,
@@ -904,10 +835,10 @@ def prove_with_waterfall(
         )
 
 
-def prove_with_waterfall_trace(
+def prove_with_trace(
     clause: Clause,
     engine: Engine,
-    depth: int = 5,
+    depth: int = 12,
     var: Optional[Var] = None,
     scheme: Optional[InductionScheme] = None,
     scheme_name: Optional[str] = None,
@@ -916,13 +847,13 @@ def prove_with_waterfall_trace(
     destructor_elim: bool = True,
     auto_induction: bool = False,
 ) -> tuple[bool, ProofTrace]:
-    """Run waterfall proof search and return a trace tree."""
+    """Run the same search as :func:`prove` and return ``(ok, trace)``."""
 
     trace = ProofTrace()
     root = _new_node("prove", clause)
     trace.roots.append(root)
     return (
-        prove_with_waterfall(
+        prove(
             clause,
             engine,
             depth=depth,
@@ -1284,29 +1215,7 @@ def _prove_waterfall_certificate_impl(
 def prove_checked(
     clause: Clause,
     engine: Engine,
-    depth: int = 5,
-    var: Optional[Var] = None,
-    scheme: Optional[InductionScheme] = None,
-    scheme_name: Optional[str] = None,
-    induction_depth: int = 1,
-) -> tuple[bool, Optional[ProofCertificate]]:
-    """Attempt checked proof using the waterfall prover."""
-
-    return prove_checked_with_waterfall(
-        clause,
-        engine,
-        depth=depth,
-        var=var,
-        scheme=scheme,
-        scheme_name=scheme_name,
-        induction_depth=induction_depth,
-    )
-
-
-def prove_checked_with_waterfall(
-    clause: Clause,
-    engine: Engine,
-    depth: int = 5,
+    depth: int = 12,
     var: Optional[Var] = None,
     scheme: Optional[InductionScheme] = None,
     scheme_name: Optional[str] = None,
@@ -1315,21 +1224,18 @@ def prove_checked_with_waterfall(
     destructor_elim: bool = True,
     auto_induction: bool = False,
 ) -> tuple[bool, Optional[ProofCertificate]]:
-    """Attempt waterfall proof search and return a certificate when successful."""
+    """Run the same search as :func:`prove` and return a certificate on success."""
 
-    if var is not None and scheme is None and scheme_name is not None:
-        scheme = get_induction_scheme(engine, scheme_name)
-    if var is not None and scheme is None and not auto_induction:
-        return False, None
-    if var is not None and scheme is not None and not var_matches_scheme(var, scheme):
-        return False, None
+    chosen_scheme = _validate_induction_request(
+        clause, engine, var, scheme, scheme_name, auto_induction
+    )
     with engine.var_context():
         cert = _prove_waterfall_certificate_impl(
             clause,
             engine,
             depth,
             var,
-            scheme,
+            chosen_scheme,
             induction_depth,
             generalize,
             destructor_elim,
@@ -1442,7 +1348,7 @@ def _check_certificate_node(
 def check_certificate(
     cert: ProofCertificate,
     engine: Engine,
-    depth: int = 5,
+    depth: int = 12,
     induction_depth: int = 1,
 ) -> bool:
     """Validate a certificate against engine semantics."""

@@ -36,8 +36,6 @@ This example installs a small natural-number theory, normalizes a term, and prov
 ```python
 from fiddlehead import *
 
-reset_var_interner()
-
 x = V("x", "Nat")
 y = V("y", "Nat")
 zero = Const("0")
@@ -46,23 +44,19 @@ add = lambda a, b: App("add", a, b)
 eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
-install_theory(engine, nat_theory(), activate_scopes=True)
+install_theory(engine, nat_theory())
 
 term = add(S(S(zero)), S(zero))
 print(normalize(term, engine))  # S(S(S(0)))
 
 goal = Clause((), eq(add(x, zero), x))
-scheme = get_induction_scheme(engine, "nat")
-assert scheme is not None
-assert prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
+assert prove(goal, engine, var=x)  # induction scheme inferred from x's sort
 ```
 
 This one proves associativity of list append and prints the resulting proof trace.
 
 ```python
 from fiddlehead import *
-
-reset_var_interner()
 
 eq = lambda a, b: App("eq", a, b)
 append = lambda a, b: App("append", a, b)
@@ -72,15 +66,10 @@ ys = V("ys", "List")
 zs = V("zs", "List")
 
 engine = make_engine(rules=builtin_rules())
-install_theory(engine, list_theory(), activate_scopes=True)
-
-list_scheme = get_induction_scheme(engine, "list")
-assert list_scheme is not None
+install_theory(engine, list_theory())
 
 goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
-ok, trace = prove_with_trace(
-    goal, engine, depth=12, var=xs, scheme=list_scheme, induction_depth=1
-)
+ok, trace = prove_with_trace(goal, engine, var=xs)
 assert ok
 print(render_proof_trace(trace))
 ```
@@ -90,16 +79,14 @@ Here is a small manual proof of `append(xs, nil) = xs` using `ProofSession`:
 ```python
 from fiddlehead import *
 
-reset_var_interner()
-
 xs = V("xs", "List")
 nil = Const("nil")
 append = lambda a, b: App("append", a, b)
 eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
-install_theory(engine, nat_theory(), activate_scopes=True)
-install_theory(engine, list_theory(), activate_scopes=True)
+install_theory(engine, nat_theory())
+install_theory(engine, list_theory())
 
 goal = Clause((), eq(append(xs, nil), xs))
 session = ProofSession(goal, engine)

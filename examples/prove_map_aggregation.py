@@ -88,8 +88,8 @@ def main() -> None:
     goal3 = Clause((), eq(sum_entries(put(m, k, zero)), sum_entries(m)), ())
     map_scheme = get_induction_scheme(engine, "map")
     assert map_scheme is not None
-    ok3 = prove_with_induction(
-        goal3, engine, m, map_scheme, depth=12, induction_depth=1
+    ok3 = prove(
+        goal3, engine, var=m, scheme=map_scheme, depth=12, induction_depth=1
     )
     print(f"  Proved: {ok3}")
     print()

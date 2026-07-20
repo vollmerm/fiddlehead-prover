@@ -12,6 +12,7 @@ from .proof import (
     _check_rewrite_first_step,
     _check_rewrite_many_step,
     _check_rewrite_step,
+    _select_induction_scheme,
     clause_solved,
     goal_equality,
     simplify_clause_with_stages,
@@ -23,7 +24,6 @@ from .syntax import Term, Var, true
 from .theory import (
     Lemma,
     RuleSource,
-    _select_induction_scheme,
     get_theorem_environment,
 )
 from .trace import ProofNode, ProofTrace, _new_node

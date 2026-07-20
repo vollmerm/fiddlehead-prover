@@ -264,8 +264,8 @@ def main() -> None:
 
     com_scheme = get_induction_scheme(engine, "com")
     assert com_scheme is not None
-    ok1 = prove_with_induction(
-        det_goal, engine, c, com_scheme, depth=16, induction_depth=1
+    ok1 = prove(
+        det_goal, engine, var=c, scheme=com_scheme, depth=16, induction_depth=1
     )
     print(f"Proved: {ok1}\n")
 

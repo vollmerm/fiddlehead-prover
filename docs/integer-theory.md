@@ -383,7 +383,7 @@ Save this as a `.py` file and run it — every assertion should pass.
 
 ## 10. Debugging proofs that get stuck
 
-If `prove_with_induction` returns `False`, inspect the simplified goals:
+If `prove` returns `False`, inspect the simplified goals:
 
 ```python
 from fiddlehead.proof import induction_branches, simplify_clause, clause_solved

@@ -208,11 +208,11 @@ def demo_standard_proofs_unaffected(engine) -> None:
     ]
 
     for name, goal, var, scheme, depth in theorems:
-        ok = prove_with_induction(
+        ok = prove(
             goal,
             engine,
-            var,
-            scheme,
+            var=var,
+            scheme=scheme,
             depth=depth,
             destructor_elim=True,  # DE enabled (default)
         )

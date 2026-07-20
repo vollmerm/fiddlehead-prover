@@ -19,7 +19,7 @@ from fiddlehead.prover import (
     make_engine,
     nat_theory,
     prove,
-    prove_with_auto_induction,
+    prove_with_trace,
     render_proof_trace,
     reset_var_interner,
 )
@@ -86,7 +86,7 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14)
+        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
         assert ok, "Auto induction should succeed for length(append(xs, ys))"
 
         trace_str = render_proof_trace(trace)
@@ -105,7 +105,7 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(append(append(xs, ys), zs), append(xs, append(ys, zs))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=15)
+        ok, trace = prove_with_trace(goal, engine, depth=15, auto_induction=True)
         assert ok, "Auto induction should succeed for append associativity"
 
         trace_str = render_proof_trace(trace)
@@ -122,7 +122,7 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(append(xs, nil), xs))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=10)
+        ok, trace = prove_with_trace(goal, engine, depth=10, auto_induction=True)
         assert ok, "Auto induction should succeed for append(xs, nil) = xs"
 
         trace_str = render_proof_trace(trace)
@@ -139,9 +139,10 @@ class TestAutoInductionSelection:
 
         goal = Clause((), eq(add(x, y), add(y, x)))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=5)
+        ok, trace = prove_with_trace(goal, engine, depth=5, auto_induction=True)
         assert ok, "Goal that simplifies to true should succeed"
-        assert "auto-induction-select" in render_proof_trace(trace)
+        # Solved by simplification alone, so no induction stage appears.
+        assert "auto-induction-select" not in render_proof_trace(trace)
 
     def test_no_nat_vars_raises_error(self, auto_env: dict) -> None:
         """Auto-induction should raise ValueError when no nat variables exist."""
@@ -157,7 +158,7 @@ class TestAutoInductionSelection:
         goal = Clause((), eq(a, b))
 
         with pytest.raises(ValueError, match="No suitable induction variable"):
-            prove_with_auto_induction(goal, engine, depth=5)
+            prove_with_trace(goal, engine, depth=5, auto_induction=True)
 
     def test_only_ground_terms_raises_error(self, auto_env: dict) -> None:
         """Auto-induction should raise ValueError when clause has only ground terms."""
@@ -168,7 +169,7 @@ class TestAutoInductionSelection:
         goal = Clause((), eq(zero, zero))
 
         with pytest.raises(ValueError, match="No suitable induction variable"):
-            prove_with_auto_induction(goal, engine, depth=5)
+            prove_with_trace(goal, engine, depth=5, auto_induction=True)
 
 
 class TestAutoInductionTrace:
@@ -186,7 +187,7 @@ class TestAutoInductionTrace:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14)
+        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
         assert ok
 
         trace_str = render_proof_trace(trace)
@@ -196,7 +197,7 @@ class TestAutoInductionTrace:
         assert "scheme=list" in trace_str
 
     def test_trace_hierarchy(self, auto_env: dict) -> None:
-        """Trace should have proper hierarchy: prove -> auto-induction-select -> induction."""
+        """Trace root is a solved prove node containing an auto-selection node."""
         engine = auto_env["engine"]
         eq = auto_env["eq"]
         length = auto_env["length"]
@@ -207,17 +208,24 @@ class TestAutoInductionTrace:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14)
+        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
         assert ok
         assert len(trace.roots) == 1
 
         root = trace.roots[0]
         assert root.kind == "prove"
-        assert len(root.children) == 1
+        assert root.solved is True
 
-        auto_node = root.children[0]
-        assert auto_node.kind == "auto-induction-select"
-        assert auto_node.solved is True
+        def find(node, kind):
+            if kind in node.kind:
+                return node
+            for child in node.children:
+                found = find(child, kind)
+                if found is not None:
+                    return found
+            return None
+
+        assert find(root, "auto-induction-select") is not None
 
 
 class TestAutoInductionSession:
@@ -299,7 +307,7 @@ class TestAutoInductionEdgeCases:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(ys), length(xs))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=15)
+        ok, trace = prove_with_trace(goal, engine, depth=15, auto_induction=True)
         assert ok
 
         trace_str = render_proof_trace(trace)
@@ -320,7 +328,7 @@ class TestAutoInductionEdgeCases:
             eq(length(append(xs, ys)), add(length(xs), length(ys))),
         )
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14)
+        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
         assert ok
 
         trace_str = render_proof_trace(trace)
@@ -342,7 +350,7 @@ class TestAutoInuctionWithScheme:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14)
+        ok, trace = prove_with_trace(goal, engine, depth=14, auto_induction=True)
         assert ok
 
         list_scheme = get_induction_scheme(engine, "list")
@@ -353,7 +361,7 @@ class TestAutoInuctionWithScheme:
 
 
 class TestProveWithAutoInductionVariants:
-    """Tests for prove_with_auto_induction with different parameters."""
+    """Tests for prove_with_trace(auto_induction=True) with different parameters."""
 
     def test_with_induction_depth(self, auto_env: dict) -> None:
         """Should work with custom induction_depth."""
@@ -367,7 +375,7 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14, induction_depth=2)
+        ok, trace = prove_with_trace(goal, engine, depth=14, induction_depth=2, auto_induction=True)
         assert ok
 
     def test_with_generalize_true(self, auto_env: dict) -> None:
@@ -382,7 +390,7 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14, generalize=True)
+        ok, trace = prove_with_trace(goal, engine, depth=14, generalize=True, auto_induction=True)
         assert ok
 
     def test_with_generalize_false(self, auto_env: dict) -> None:
@@ -397,5 +405,5 @@ class TestProveWithAutoInductionVariants:
 
         goal = Clause((), eq(length(append(xs, ys)), add(length(xs), length(ys))))
 
-        ok, trace = prove_with_auto_induction(goal, engine, depth=14, generalize=False)
+        ok, trace = prove_with_trace(goal, engine, depth=14, generalize=False, auto_induction=True)
         assert ok

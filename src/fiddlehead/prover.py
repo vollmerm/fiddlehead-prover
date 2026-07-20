@@ -22,7 +22,7 @@ Boyer–Moore style rewriting core with:
 
 Public API (small, stable surface):
 - term constructors: V, Const, App
-- proving entry points: normalize, prove, prove_with_induction, prove_with_registered_induction
+- proving entry points: normalize, prove, prove_with_trace
 - checked proving entry points: prove_checked, check_certificate
 - typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
@@ -72,12 +72,6 @@ from .proof import (
     induction_branches,
     prove,
     prove_checked,
-    prove_checked_with_waterfall,
-    prove_with_auto_induction,
-    prove_with_induction,
-    prove_with_registered_induction,
-    prove_with_waterfall,
-    prove_with_waterfall_trace,
     prove_with_trace,
     simplify_clause,
 )
@@ -162,11 +156,6 @@ __all__ = [
     "apply_subst",
     "normalize",
     "prove",
-    "prove_with_auto_induction",
-    "prove_with_induction",
-    "prove_with_registered_induction",
-    "prove_with_waterfall",
-    "prove_with_waterfall_trace",
     "simplify_clause",
     "clause_solved",
     "induction_branches",
@@ -178,7 +167,6 @@ __all__ = [
     "ProofCertificate",
     "certificate_to_proof_trace",
     "prove_checked",
-    "prove_checked_with_waterfall",
     "check_certificate",
     "Lemma",
     "NamedRuleInfo",

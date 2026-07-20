@@ -23,7 +23,7 @@ from fiddlehead.prover import (
     normalize,
     prove,
     prove_checked,
-    prove_with_waterfall_trace,
+    prove_with_trace,
     render_proof_trace,
     register_sort_signature,
     render_waterfall_trace,
@@ -83,7 +83,7 @@ def test_waterfall_uses_forward_chaining_rules() -> None:
 
     assert prove(goal, engine, depth=4)
 
-    ok, trace = prove_with_waterfall_trace(goal, engine, depth=4)
+    ok, trace = prove_with_trace(goal, engine, depth=4)
     assert ok
 
     rendered = render_waterfall_trace(trace)

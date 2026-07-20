@@ -184,8 +184,8 @@ Induction is explicit and driven by induction schemes:
 - step cases include induction hypotheses as assumptions
 
 Within the waterfall, induction comes late rather than first.
-`prove_with_induction(...)` fixes the induction target up front; before
-inducting, the prover may apply:
+Passing `var=` (and optionally `scheme=`) to `prove(...)` fixes the induction
+target up front; before inducting, the prover may apply:
 
 - destructor elimination, which replaces selector-style terms by fresh
   variables

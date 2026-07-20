@@ -14,12 +14,15 @@ from fiddlehead import *
 
 Most example scripts follow the same pattern:
 
-1. Reset the variable interner with `reset_var_interner()`.
-2. Build terms with `V(...)`, `Const(...)`, and `App(...)`.
-3. Create an engine with `make_engine(rules=builtin_rules())`.
-4. Install one or more theories with `install_theory(...)`.
-5. State a goal with `Clause(...)`.
-6. Prove it with `prove(...)`, `prove_with_trace(...)`, or `prove_with_induction(...)`.
+1. Build terms with `V(...)`, `Const(...)`, and `App(...)`.
+2. Create an engine with `make_engine(rules=builtin_rules())`.
+3. Install one or more theories with `install_theory(...)`.
+4. State a goal with `Clause(...)`.
+5. Prove it with `prove(...)` or `prove_with_trace(...)`, passing `var=` for
+   proofs by induction.
+
+Calling `reset_var_interner()` first is optional; it clears remembered
+variable sorts when unrelated proof scripts share one interpreter.
 
 That is enough for the natural-number and list proofs in `examples/`.
 
@@ -90,9 +93,13 @@ Theories provide rewrite rules, sort information, and induction schemes.
 Installs a theory into an engine.
 
 ```python
-install_theory(engine, nat_theory(), activate_scopes=True)
-install_theory(engine, list_theory(), activate_scopes=True)
+install_theory(engine, nat_theory())
+install_theory(engine, list_theory())
 ```
+
+Reinstalling the same theory version is a no-op, so scripts and notebook
+cells can be re-run safely. Installing a different version of an installed
+theory raises.
 
 Most of the example scripts use these built-in theories:
 
@@ -206,16 +213,21 @@ assert nat_scheme is not None
 assert list_scheme is not None
 ```
 
-### `prove_with_induction(clause, engine, var, scheme, ...)`
+### `prove(clause, engine, var=..., ...)` — proofs by induction
 
-Proves a clause by explicitly supplying the induction variable and scheme.
+Passing `var=` to `prove` (or `prove_with_trace`) proves the clause by
+induction on that variable. The scheme is looked up from the variable's sort;
+pass `scheme=` or `scheme_name=` to override.
 
 ```python
-assert prove_with_induction(goal, engine, x, nat_scheme, depth=8, induction_depth=1)
+assert prove(goal, engine, var=x, depth=8, induction_depth=1)
 ```
 
-This is the most direct induction API when you already know which variable and
-scheme you want to use.
+Invalid induction requests raise `ValueError` instead of returning `False`:
+an unknown scheme name, a variable whose sort has no registered scheme, a
+variable/scheme sort mismatch, or a variable that does not occur in the
+clause. A plain `False` therefore always means the search itself failed —
+try a larger `depth` or inspect the trace.
 
 ### `prove_checked(clause, engine, ...)`
 
@@ -273,7 +285,7 @@ assert str(normalize(term, engine)) == "S(S(S(0)))"
 goal = Clause((), eq(add(x, zero), x))
 scheme = get_induction_scheme(engine, "nat")
 assert scheme is not None
-assert prove_with_induction(goal, engine, x, scheme, depth=8, induction_depth=1)
+assert prove(goal, engine, var=x, scheme=scheme, depth=8, induction_depth=1)
 ```
 
 ## Worked example: append associativity with a trace
@@ -320,7 +332,7 @@ print(render_proof_trace(trace))
 | `prove_append_associativity.py` | `V`, `App`, `Clause`, `list_theory`, `prove_with_trace`, `render_proof_trace` |
 | `prove_length_append.py` | same as above, plus installing both `nat_theory()` and `list_theory()` |
 | `prove_map_theorems.py` | `Clause(..., disequalities=...)` and `simplify_clause` |
-| `prove_map_aggregation.py` | `register_recursive_definition`, `SortSignature`, `prove_with_trace`, `prove_with_induction` |
+| `prove_map_aggregation.py` | `register_recursive_definition`, `SortSignature`, `prove_with_trace`, `prove` |
 
 The remaining examples go a step further and extend the prover with custom sort
 signatures, rewrite rules, or induction schemes. Those are public APIs too, but
@@ -365,8 +377,8 @@ the scope the same way you manage lemma rewrites and non-recursive definitions.
 
 1. Register the symbol signature (`SortSignature`)
 2. Register recursive equations with `register_recursive_definition(...)`
-3. Prove properties of the new function with `prove_with_trace(...)` and
-   `prove_with_induction(...)`
+3. Prove properties of the new function with `prove(...)` and
+   `prove_with_trace(...)`
 
 ## What to read next
 

@@ -32,7 +32,6 @@ def main() -> None:
     zmul = lambda l, r: App("zmul", l, r)
     zsucc = lambda t: App("zsucc", t)
     zpred = lambda t: App("zpred", t)
-    eq = lambda l, r: App("eq", l, r)
 
     x = V("x", "Int")
     y = V("y", "Int")

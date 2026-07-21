@@ -40,7 +40,6 @@ def main() -> None:
     znonneg = lambda t: App("znonneg", t)
     zleq = lambda l, r: App("zleq", l, r)
     zlt = lambda l, r: App("zlt", l, r)
-    eq = lambda l, r: App("eq", l, r)
 
     x = V("x", "Int")
     y = V("y", "Int")

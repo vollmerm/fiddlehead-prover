@@ -29,8 +29,6 @@ def main() -> None:
 
     xs = V("xs", "List")
     nil = Const("nil")
-    append = lambda a, b: App("append", a, b)
-    eq = lambda a, b: App("eq", a, b)
 
     goal = Clause((), eq(append(xs, nil), xs))
 
@@ -58,7 +56,7 @@ def main() -> None:
     print(f"  IHs: {session.list_ihs()}")
 
     print("\n  Step 1a: Apply theory rule for append(nil, xs)")
-    session.rewrite_first("theory.core.list.0")
+    session.rewrite_first("theory.core.list.append-nil")
     print(f"  Goal after rewrite: {session.current_goal().goal}")
 
     print("\n  Step 1b: Discharge with exact()")
@@ -74,7 +72,7 @@ def main() -> None:
     print()
 
     print("  Step 2a: Apply theory rule for append(cons(h, t), xs)")
-    session.rewrite_first("theory.core.list.1")
+    session.rewrite_first("theory.core.list.append-cons")
     print(f"  Goal after rewrite: {session.current_goal().goal}")
 
     print("\n  Step 2b: Apply IH.0 (append(t, nil) = t)")

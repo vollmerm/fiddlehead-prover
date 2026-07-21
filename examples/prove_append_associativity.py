@@ -15,8 +15,6 @@ def main() -> None:
     engine = make_engine(rules=builtin_rules())
     install_theory(engine, list_theory(), activate_scopes=True)
 
-    eq = lambda a, b: App("eq", a, b)
-    append = lambda a, b: App("append", a, b)
 
     xs = V("xs", "List")
     ys = V("ys", "List")

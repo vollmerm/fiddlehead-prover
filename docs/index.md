@@ -18,10 +18,6 @@ Fiddlehead works with first-order terms and equality goals:
 from fiddlehead import *
 
 x = V("x", "Nat")
-zero = Const("0")
-S = lambda t: App("S", t)
-add = lambda a, b: App("add", a, b)
-eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
 install_theory(engine, nat_theory())

@@ -18,8 +18,6 @@ def main() -> None:
     n = V("n", "Nat")
     zero = Const("0")
     succ = lambda t: App("S", t)
-    add = lambda a, b: App("add", a, b)
-    eq = lambda a, b: App("eq", a, b)
     twice = lambda t: App("twice", t)
 
     register_recursive_definition(

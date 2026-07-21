@@ -7,6 +7,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from fiddlehead import *
+from fiddlehead.prover import TypeVar
 
 
 def _print_language_and_semantics() -> None:
@@ -142,8 +143,6 @@ def main() -> None:
     x_id = Const("x_id")
 
     succ = lambda t: App("S", t)
-    add = lambda lhs, rhs: App("add", lhs, rhs)
-    eq = lambda lhs, rhs: App("eq", lhs, rhs)
     get = lambda m, key: App("get", m, key)
     put = lambda m, key, val: App("put", m, key, val)
     some = lambda t: App("some", t)

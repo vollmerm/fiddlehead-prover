@@ -8,13 +8,18 @@ from fiddlehead.prover import (
     Const,
     ProofSession,
     Rule,
+    S,
     V,
-    Const,
+    add,
+    append,
     builtin_rules,
+    cons,
     default_engine_config,
     default_sort_signatures,
+    eq,
     get_induction_scheme,
     install_theory,
+    length,
     list_theory,
     make_engine,
     nat_theory,
@@ -33,13 +38,7 @@ def auto_env() -> dict:
     install_theory(engine, nat_theory(), activate_scopes=True)
     install_theory(engine, list_theory(), activate_scopes=True)
 
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
-    append = lambda a, b: App("append", a, b)
-    length = lambda t: App("length", t)
     nil = Const("nil")
-    cons = lambda a, b: App("cons", a, b)
-    S = lambda t: App("S", t)
     zero = Const("0")
 
     xs = V("xs", "List")
@@ -150,7 +149,6 @@ class TestAutoInductionSelection:
         engine = make_engine(rules=builtin_rules())
         install_theory(engine, nat_theory(), activate_scopes=True)
 
-        eq = lambda a, b: App("eq", a, b)
         a = V("a")
         b = V("b")
 

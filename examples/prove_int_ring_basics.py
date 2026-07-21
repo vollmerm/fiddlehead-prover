@@ -25,7 +25,6 @@ def main() -> None:
     install_theory(engine, nat_theory(), activate_scopes=True)
     install_theory(engine, int_theory(), activate_scopes=True)
 
-    eq = lambda a, b: App("eq", a, b)
     zadd = lambda a, b: App("zadd", a, b)
     zmul = lambda a, b: App("zmul", a, b)
     zneg = lambda t: App("zneg", t)

@@ -290,6 +290,12 @@ It supports:
 - rule classes, including rewrite rules and forward-chaining rules
 - scoped rule sets that can be activated and deactivated
 
+Theory rules install under `theory.<theory-name>.<rule-name>` when the rule
+carries a `name` (all builtin theories name their rules, e.g.
+`theory.core.list.append-nil`), falling back to the rule's index in the theory
+otherwise. These are the names tactics like `ProofSession.rewrite_first(...)`
+accept.
+
 The entry points for recursive definitions are:
 
 - `register_recursive_definition(engine, ...)`

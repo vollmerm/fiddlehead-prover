@@ -37,16 +37,15 @@ Define the term helpers you will use throughout:
 ```python
 z0 = Const("z0")
 z1 = Const("z1")
-zadd = lambda a, b: App("zadd", a, b)
-zmul = lambda a, b: App("zmul", a, b)
-zneg = lambda t:   App("zneg", t)
-zsucc = lambda t:  App("zsucc", t)
-zpred = lambda t:  App("zpred", t)
-zsub = lambda a, b: App("zsub", a, b)
-znonneg = lambda t: App("znonneg", t)
-zleq = lambda a, b: App("zleq", a, b)
-zlt = lambda a, b: App("zlt", a, b)
-eq = lambda a, b: App("eq", a, b)
+zadd = fn("zadd")
+zmul = fn("zmul")
+zneg = fn("zneg")
+zsucc = fn("zsucc")
+zpred = fn("zpred")
+zsub = fn("zsub")
+znonneg = fn("znonneg")
+zleq = fn("zleq")
+zlt = fn("zlt")
 ```
 
 ---
@@ -313,14 +312,13 @@ install_theory(engine, int_theory(), activate_scopes=True)
 
 z0 = Const("z0")
 z1 = Const("z1")
-zadd = lambda a, b: App("zadd", a, b)
-zmul = lambda a, b: App("zmul", a, b)
-zneg = lambda t:   App("zneg", t)
-zsucc = lambda t:  App("zsucc", t)
-zsub = lambda a, b: App("zsub", a, b)
-znonneg = lambda t: App("znonneg", t)
-zleq = lambda a, b: App("zleq", a, b)
-eq = lambda a, b: App("eq", a, b)
+zadd = fn("zadd")
+zmul = fn("zmul")
+zneg = fn("zneg")
+zsucc = fn("zsucc")
+zsub = fn("zsub")
+znonneg = fn("znonneg")
+zleq = fn("zleq")
 
 # --- Normalization ---
 assert str(normalize(zsucc(z0), engine)) == "zint(S(0), 0)"

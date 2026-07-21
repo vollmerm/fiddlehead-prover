@@ -38,10 +38,6 @@ from fiddlehead import *
 
 x = V("x", "Nat")
 y = V("y", "Nat")
-zero = Const("0")
-S = lambda t: App("S", t)
-add = lambda a, b: App("add", a, b)
-eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
 install_theory(engine, nat_theory())
@@ -57,9 +53,6 @@ This one proves associativity of list append and prints the resulting proof trac
 
 ```python
 from fiddlehead import *
-
-eq = lambda a, b: App("eq", a, b)
-append = lambda a, b: App("append", a, b)
 
 xs = V("xs", "List")
 ys = V("ys", "List")
@@ -80,9 +73,6 @@ Here is a small manual proof of `append(xs, nil) = xs` using `ProofSession`:
 from fiddlehead import *
 
 xs = V("xs", "List")
-nil = Const("nil")
-append = lambda a, b: App("append", a, b)
-eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
 install_theory(engine, nat_theory())
@@ -92,9 +82,9 @@ goal = Clause((), eq(append(xs, nil), xs))
 session = ProofSession(goal, engine)
 
 session.induct(xs)
-session.rewrite_first("theory.core.list.0")
+session.rewrite_first("theory.core.list.append-nil")
 session.exact()
-session.rewrite_first("theory.core.list.1")
+session.rewrite_first("theory.core.list.append-cons")
 session.rewrite_first("IH.0")
 session.exact()
 

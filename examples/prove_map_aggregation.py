@@ -7,6 +7,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from fiddlehead import *
+from fiddlehead.prover import TypeVar, map_induction_scheme
 
 
 def main() -> None:
@@ -27,8 +28,6 @@ def main() -> None:
     zero = Const("0")
     succ = lambda t: App("S", t)
 
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
     put = lambda m, k, v: App("put", m, k, v)
     get = lambda m, k: App("get", m, k)
     some = lambda x: App("some", x)

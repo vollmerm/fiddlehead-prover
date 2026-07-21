@@ -23,7 +23,6 @@ def main() -> None:
     v1 = V("v1")
     v2 = V("v2")
 
-    eq = lambda a, b: App("eq", a, b)
     put = lambda m, k, v: App("put", m, k, v)
     get = lambda m, k: App("get", m, k)
     some = lambda x: App("some", x)

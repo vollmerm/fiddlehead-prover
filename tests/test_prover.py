@@ -6,6 +6,22 @@ from typing import Dict
 import pytest
 
 from fiddlehead.prover import *
+from fiddlehead.prover import (
+    Context,
+    EngineConfig,
+    Fun,
+    Trace,
+    TypeVar,
+    apply_subst,
+    certificate_to_proof_trace,
+    clause_solved,
+    default_engine_config,
+    default_sort_signatures,
+    get_sort_signature,
+    match,
+    render_waterfall_trace,
+    theory_from_module,
+)
 from fiddlehead.proof import split_clause
 
 
@@ -21,18 +37,11 @@ def env() -> Dict[str, object]:
     zero = Const("0")
     one = Const("1")
 
-    S = lambda t: App("S", t)
-    mul = lambda a, b: App("mul", a, b)
-    add = lambda a, b: App("add", a, b)
     bnot = lambda a: App("not", a)
     band = lambda a, b: App("and", a, b)
     bor = lambda a, b: App("or", a, b)
     nil = Const("nil")
-    cons = lambda a, b: App("cons", a, b)
     app = lambda a, b: App("append", a, b)
-    length = lambda a: App("length", a)
-    eq = lambda a, b: App("eq", a, b)
-    neq = lambda a, b: App("neq", a, b)
     f = lambda a: App("f", a)
 
     r3 = Rule(f(x), one, conditions=((x, zero),))  # type: ignore
@@ -335,7 +344,6 @@ def test_inductive_repeat_skip_exec_proves() -> None:
     repeat_skip = lambda count: App("repeat_skip", count)
     seq = lambda first, second: App("seq", first, second)
     exec_cmd = lambda cmd, state: App("exec", cmd, state)
-    eq = lambda a, b: App("eq", a, b)
 
     register_sort_signature(engine, "skip", SortSignature((), TypeConst("Com")))
     register_sort_signature(
@@ -1032,7 +1040,6 @@ def test_map_theory() -> None:
     put = lambda m, k, v: App("put", m, k, v)
     get = lambda m, k: App("get", m, k)
     some = lambda x: App("some", x)
-    eq = lambda a, b: App("eq", a, b)
 
     map_core = map_theory()
     assert map_core.sort_arities["Map"] == 2
@@ -1104,7 +1111,6 @@ def test_int_theory() -> None:
     b = V("zi_b", "Int")
     c = V("zi_c", "Int")
     zero_nat = Const("0")
-    S = lambda t: App("S", t)
 
     z0 = Const("z0")
     z1 = Const("z1")
@@ -1118,7 +1124,6 @@ def test_int_theory() -> None:
     znonneg = lambda t: App("znonneg", t)
     zleq = lambda l, r: App("zleq", l, r)
     zlt = lambda l, r: App("zlt", l, r)
-    eq = lambda l, r: App("eq", l, r)
 
     int_core = int_theory()
     assert int_core.depends_on == ("core.nat",)
@@ -1195,7 +1200,6 @@ def test_int_theory_induction() -> None:
     zpred = lambda t: App("zpred", t)
     zsub = lambda l, r: App("zsub", l, r)
     zleq = lambda l, r: App("zleq", l, r)
-    eq = lambda l, r: App("eq", l, r)
 
     engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
     install_theory(engine, nat_theory(), activate_scopes=True)
@@ -1224,7 +1228,6 @@ def test_int_lemmas() -> None:
 
     zadd = lambda l, r: App("zadd", l, r)
     zneg = lambda t: App("zneg", t)
-    eq = lambda l, r: App("eq", l, r)
 
     engine = make_engine(rules=builtin_rules(), ground_cache={}, schemes={})
     install_theory(engine, nat_theory(), activate_scopes=True)
@@ -1250,7 +1253,6 @@ def test_lpo_decrease_non_ac_symbol() -> None:
     reset_var_interner()
 
     x = V("x")
-    S = lambda t: App("S", t)
     f = lambda a: App("f", a)
 
     shared_signatures = default_sort_signatures()
@@ -1285,8 +1287,6 @@ def test_lpo_decrease_skipped_for_ac_symbols() -> None:
     reset_var_interner()
 
     zero = Const("0")
-    S = lambda t: App("S", t)
-    add = lambda a, b: App("add", a, b)
 
     config = EngineConfig(
         precedence={"S": 2, "add": 3, "0": 0},
@@ -1305,8 +1305,6 @@ def test_ac_and_non_ac_mixed_normalization() -> None:
     reset_var_interner()
 
     zero = Const("0")
-    S = lambda t: App("S", t)
-    add = lambda a, b: App("add", a, b)
     leaf = Const("leaf")
     node = lambda l, v, r: App("node", l, v, r)
     mirror_fn = lambda t: App("mirror", t)

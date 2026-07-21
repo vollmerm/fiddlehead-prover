@@ -9,7 +9,7 @@ used by rewriting, clause simplification, and proof search.
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import ClassVar, Dict, Optional, Tuple
+from typing import Callable, ClassVar, Dict, Optional, Tuple
 from weakref import WeakValueDictionary
 
 
@@ -169,6 +169,33 @@ def App(symbol: str, *args: Term) -> Fun:
 
 true = Const("true")
 false = Const("false")
+
+
+def fn(symbol: str) -> Callable[..., Fun]:
+    """Return a term builder for ``symbol``: ``zadd = fn("zadd"); zadd(x, y)``."""
+
+    def build(*args: Term) -> Fun:
+        return Fun(symbol, args)
+
+    return build
+
+
+# Ready-made builders for the builtin logic symbols and core-theory symbols,
+# so scripts do not need `eq = lambda a, b: App("eq", a, b)` boilerplate.
+eq = fn("eq")
+neq = fn("neq")
+if_ = fn("if")
+not_ = fn("not")
+and_ = fn("and")
+or_ = fn("or")
+S = fn("S")
+add = fn("add")
+mul = fn("mul")
+cons = fn("cons")
+append = fn("append")
+length = fn("length")
+zero = Const("0")
+nil = Const("nil")
 
 Subst = Dict[Var, Term]
 

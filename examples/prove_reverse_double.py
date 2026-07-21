@@ -7,6 +7,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from fiddlehead import *
+from fiddlehead.prover import TypeVar
 
 
 def main() -> None:
@@ -19,10 +20,7 @@ def main() -> None:
 
     # Term constructors
     nil = Const("nil")
-    cons = lambda h, t: App("cons", h, t)
-    append = lambda a, b: App("append", a, b)
     rev = lambda xs: App("rev", xs)
-    eq = lambda a, b: App("eq", a, b)
 
     # Variables (with explicit List sort for induction scheme resolution)
     xs = V("xs", "List")
@@ -73,7 +71,7 @@ def main() -> None:
     # --- Branch 1: Base case xs = nil ---
     # Goal: eq(append(nil, nil), nil)
     print(f"\n  [Base] {sess1.current_goal().goal}")
-    sess1.rewrite_first("theory.core.list.0")  # append(nil, nil) -> nil
+    sess1.rewrite_first("theory.core.list.append-nil")  # append(nil, nil) -> nil
     print(f"         after list.0: {sess1.current_goal().goal}")
     sess1.exact()
     print("         solved.")
@@ -84,7 +82,7 @@ def main() -> None:
     print(f"\n  [Step] {sess1.current_goal().goal}")
     ihs = sess1.list_ihs()
     print(f"         IHs: { {k: str(v.lhs) + ' -> ' + str(v.rhs) for k, v in ihs.items()} }")
-    sess1.rewrite_first("theory.core.list.1")  # cons(h', append(t', nil))
+    sess1.rewrite_first("theory.core.list.append-cons")  # cons(h', append(t', nil))
     print(f"         after list.1: {sess1.current_goal().goal}")
     sess1.rewrite_first("IH.0")                # cons(h', t')
     print(f"         after IH.0:   {sess1.current_goal().goal}")
@@ -134,16 +132,16 @@ def main() -> None:
     print(f"\n  [Step] {sess2.current_goal().goal}")
     print(f"         IHs: {list(sess2.list_ihs().keys())}")
     # Step 1: inner rewrite — append(cons(h',t'), ys) -> cons(h', append(t',ys))
-    sess2.rewrite_first("theory.core.list.1")
+    sess2.rewrite_first("theory.core.list.append-cons")
     print(f"         after list.1 (inner): {sess2.current_goal().goal}")
     # Step 2: outer rewrite — append(cons(h', append(t',ys)), zs) -> cons(h', append(append(t',ys),zs))
-    sess2.rewrite_first("theory.core.list.1")
+    sess2.rewrite_first("theory.core.list.append-cons")
     print(f"         after list.1 (outer): {sess2.current_goal().goal}")
     # Step 3: apply IH — append(append(t',ys),zs) -> append(t', append(ys,zs))
     sess2.rewrite_first("IH.0")
     print(f"         after IH.0:           {sess2.current_goal().goal}")
     # Step 4: expand RHS — append(cons(h',t'), append(ys,zs)) -> cons(h', append(t',append(ys,zs)))
-    sess2.rewrite_first("theory.core.list.1")
+    sess2.rewrite_first("theory.core.list.append-cons")
     print(f"         after list.1 (RHS):   {sess2.current_goal().goal}")
     sess2.exact()
     print("         solved.")
@@ -190,7 +188,7 @@ def main() -> None:
     #   def-rev.0:        rev(ys) = append(rev(ys), nil)
     #   append_right_id:  rev(ys) = rev(ys)
     print(f"\n  [Base] {sess3.current_goal().goal}")
-    sess3.rewrite_first("theory.core.list.0")      # append(nil,ys) -> ys
+    sess3.rewrite_first("theory.core.list.append-nil")      # append(nil,ys) -> ys
     print(f"         after list.0:              {sess3.current_goal().goal}")
     sess3.rewrite_first("def-rev.0")               # rev(nil) -> nil
     print(f"         after def-rev.0:           {sess3.current_goal().goal}")
@@ -214,7 +212,7 @@ def main() -> None:
     #                  append(rev(t'),cons(h',nil)))           append(rev(t'),cons(h',nil)))
     print(f"\n  [Step] {sess3.current_goal().goal}")
     print(f"         IHs: {list(sess3.list_ihs().keys())}")
-    sess3.rewrite_first("theory.core.list.1")   # expand append in argument of outer rev
+    sess3.rewrite_first("theory.core.list.append-cons")   # expand append in argument of outer rev
     print(f"         after list.1:              {sess3.current_goal().goal}")
     sess3.rewrite_first("def-rev.1")            # unfold rev(cons(h', append(t',ys))) on LHS
     print(f"         after def-rev.1 (LHS):     {sess3.current_goal().goal}")

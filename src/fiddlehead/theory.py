@@ -52,7 +52,26 @@ from .rule_classes import (
     normalize_rule_classes,
     rewrite_rule_class,
 )
-from .syntax import App, Const, Fun, Term, V, Var, false, true
+from .syntax import (
+    Const,
+    Fun,
+    S,
+    Term,
+    V,
+    Var,
+    add,
+    append,
+    cons,
+    eq,
+    false,
+    fn,
+    if_,
+    length,
+    mul,
+    nil,
+    true,
+    zero,
+)
 from .validation import _validate_clause_sorts, _validate_rule_sorts
 
 
@@ -112,6 +131,12 @@ class Theory:
         object.__setattr__(self, "assoc", tuple(self.assoc))
         object.__setattr__(self, "comm", tuple(self.comm))
         object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
+        named = [rule.name for rule in self.rules if rule.name]
+        duplicates = sorted({n for n in named if named.count(n) > 1})
+        if duplicates:
+            raise ValueError(
+                f"Duplicate rule names in theory {self.name}: {', '.join(duplicates)}"
+            )
 
 
 def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
@@ -119,16 +144,6 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
 
     x = V("nat_x")
     y = V("nat_y")
-    zero = Const("0")
-
-    def succ(term: Term) -> Term:
-        return App("S", term)
-
-    def add(left: Term, right: Term) -> Term:
-        return App("add", left, right)
-
-    def mul(left: Term, right: Term) -> Term:
-        return App("mul", left, right)
 
     return Theory(
         name=name,
@@ -142,12 +157,12 @@ def nat_theory(name: str = "core.nat", version: str = "1.0.0") -> Theory:
             ),
         },
         rules=(
-            Rule(add(zero, y), y),
-            Rule(add(succ(x), y), succ(add(x, y))),
-            Rule(add(x, zero), x),
-            Rule(add(x, succ(y)), succ(add(x, y))),
-            Rule(mul(zero, y), zero),
-            Rule(mul(succ(x), y), add(y, mul(x, y))),
+            Rule(add(zero, y), y, name="add-zero-left"),
+            Rule(add(S(x), y), S(add(x, y)), name="add-succ-left"),
+            Rule(add(x, zero), x, name="add-zero-right"),
+            Rule(add(x, S(y)), S(add(x, y)), name="add-succ-right"),
+            Rule(mul(zero, y), zero, name="mul-zero"),
+            Rule(mul(S(x), y), add(y, mul(x, y)), name="mul-succ"),
         ),
         schemes=(nat_induction_scheme(zero),),
         precedence={"mul": 4, "add": 3},
@@ -171,49 +186,19 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
     b = V("int_b", "Nat")
     c = V("int_c", "Nat")
     d = V("int_d", "Nat")
-    zero_nat = Const("0")
-    one_nat = App("S", zero_nat)
+    one = S(zero)
     z0 = Const("z0")
     z1 = Const("z1")
-
-    def succ(term: Term) -> Term:
-        return App("S", term)
-
-    def add_nat(left: Term, right: Term) -> Term:
-        return App("add", left, right)
-
-    def mul_nat(left: Term, right: Term) -> Term:
-        return App("mul", left, right)
-
-    def zint(pos_nat: Term, neg_nat: Term) -> Term:
-        return App("zint", pos_nat, neg_nat)
-
-    def zadd(left: Term, right: Term) -> Term:
-        return App("zadd", left, right)
-
-    def zmul(left: Term, right: Term) -> Term:
-        return App("zmul", left, right)
-
-    def zneg(term: Term) -> Term:
-        return App("zneg", term)
-
-    def zsucc(term: Term) -> Term:
-        return App("zsucc", term)
-
-    def zpred(term: Term) -> Term:
-        return App("zpred", term)
-
-    def zsub(left: Term, right: Term) -> Term:
-        return App("zsub", left, right)
-
-    def znonneg(term: Term) -> Term:
-        return App("znonneg", term)
-
-    def zleq(left: Term, right: Term) -> Term:
-        return App("zleq", left, right)
-
-    def zlt(left: Term, right: Term) -> Term:
-        return App("zlt", left, right)
+    zint = fn("zint")
+    zadd = fn("zadd")
+    zmul = fn("zmul")
+    zneg = fn("zneg")
+    zsucc = fn("zsucc")
+    zpred = fn("zpred")
+    zsub = fn("zsub")
+    znonneg = fn("znonneg")
+    zleq = fn("zleq")
+    zlt = fn("zlt")
 
     return Theory(
         name=name,
@@ -246,124 +231,173 @@ def int_theory(name: str = "core.int", version: str = "1.0.0") -> Theory:
             ),
         },
         rules=(
-            Rule(z0, zint(zero_nat, zero_nat), skip_decrease_check=True),
-            Rule(z1, zint(one_nat, zero_nat), skip_decrease_check=True),
-            Rule(zadd(z0, y), y, skip_decrease_check=True),
-            Rule(zadd(y, z0), y, skip_decrease_check=True),
+            Rule(z0, zint(zero, zero), skip_decrease_check=True, name="z0-def"),
+            Rule(z1, zint(one, zero), skip_decrease_check=True, name="z1-def"),
+            Rule(zadd(z0, y), y, skip_decrease_check=True, name="zadd-z0-left"),
+            Rule(zadd(y, z0), y, skip_decrease_check=True, name="zadd-z0-right"),
             Rule(
-                zadd(zint(zero_nat, zero_nat), y),
+                zadd(zint(zero, zero), y),
                 y,
                 skip_decrease_check=True,
+                name="zadd-zero-left",
             ),
             Rule(
-                zadd(y, zint(zero_nat, zero_nat)),
+                zadd(y, zint(zero, zero)),
                 y,
                 skip_decrease_check=True,
+                name="zadd-zero-right",
             ),
             Rule(
                 zadd(zint(a, b), zint(c, d)),
-                zint(add_nat(a, c), add_nat(b, d)),
+                zint(add(a, c), add(b, d)),
                 skip_decrease_check=True,
+                name="zadd-zint",
             ),
-            Rule(zneg(z0), z0),
-            Rule(zneg(zint(a, b)), zint(b, a)),
-            Rule(zmul(z0, y), z0, skip_decrease_check=True),
-            Rule(zmul(y, z0), z0, skip_decrease_check=True),
+            Rule(zneg(z0), z0, name="zneg-z0"),
+            Rule(zneg(zint(a, b)), zint(b, a), name="zneg-zint"),
+            Rule(zmul(z0, y), z0, skip_decrease_check=True, name="zmul-z0-left"),
+            Rule(zmul(y, z0), z0, skip_decrease_check=True, name="zmul-z0-right"),
             Rule(
-                zmul(zint(zero_nat, zero_nat), y),
-                zint(zero_nat, zero_nat),
+                zmul(zint(zero, zero), y),
+                zint(zero, zero),
                 skip_decrease_check=True,
+                name="zmul-zero-left",
             ),
             Rule(
-                zmul(y, zint(zero_nat, zero_nat)),
-                zint(zero_nat, zero_nat),
+                zmul(y, zint(zero, zero)),
+                zint(zero, zero),
                 skip_decrease_check=True,
+                name="zmul-zero-right",
             ),
-            Rule(zmul(z1, y), y, skip_decrease_check=True),
-            Rule(zmul(y, z1), y, skip_decrease_check=True),
+            Rule(zmul(z1, y), y, skip_decrease_check=True, name="zmul-z1-left"),
+            Rule(zmul(y, z1), y, skip_decrease_check=True, name="zmul-z1-right"),
             Rule(
-                zmul(zint(one_nat, zero_nat), y),
+                zmul(zint(one, zero), y),
                 y,
                 skip_decrease_check=True,
+                name="zmul-one-left",
             ),
             Rule(
-                zmul(y, zint(one_nat, zero_nat)),
+                zmul(y, zint(one, zero)),
                 y,
                 skip_decrease_check=True,
+                name="zmul-one-right",
             ),
             Rule(
                 zmul(zint(a, b), zint(c, d)),
                 zint(
-                    add_nat(mul_nat(a, c), mul_nat(b, d)),
-                    add_nat(mul_nat(a, d), mul_nat(b, c)),
+                    add(mul(a, c), mul(b, d)),
+                    add(mul(a, d), mul(b, c)),
                 ),
                 skip_decrease_check=True,
+                name="zmul-zint",
             ),
-            Rule(zint(succ(a), succ(b)), zint(a, b)),
-            Rule(zsucc(zint(a, b)), zint(succ(a), b), skip_decrease_check=True),
-            Rule(zpred(zint(a, b)), zint(a, succ(b)), skip_decrease_check=True),
-            Rule(zpred(zsucc(x)), x, skip_decrease_check=True),
-            Rule(zsucc(zpred(x)), x, skip_decrease_check=True),
-            Rule(zneg(zsucc(x)), zpred(zneg(x)), skip_decrease_check=True),
-            Rule(zneg(zpred(x)), zsucc(zneg(x)), skip_decrease_check=True),
-            Rule(zsub(x, y), zadd(x, zneg(y)), skip_decrease_check=True),
-            Rule(znonneg(zint(zero_nat, zero_nat)), true, skip_decrease_check=True),
+            Rule(zint(S(a), S(b)), zint(a, b), name="zint-cancel"),
             Rule(
-                znonneg(zint(succ(a), zero_nat)),
+                zsucc(zint(a, b)),
+                zint(S(a), b),
+                skip_decrease_check=True,
+                name="zsucc-zint",
+            ),
+            Rule(
+                zpred(zint(a, b)),
+                zint(a, S(b)),
+                skip_decrease_check=True,
+                name="zpred-zint",
+            ),
+            Rule(zpred(zsucc(x)), x, skip_decrease_check=True, name="zpred-zsucc"),
+            Rule(zsucc(zpred(x)), x, skip_decrease_check=True, name="zsucc-zpred"),
+            Rule(
+                zneg(zsucc(x)),
+                zpred(zneg(x)),
+                skip_decrease_check=True,
+                name="zneg-zsucc",
+            ),
+            Rule(
+                zneg(zpred(x)),
+                zsucc(zneg(x)),
+                skip_decrease_check=True,
+                name="zneg-zpred",
+            ),
+            Rule(zsub(x, y), zadd(x, zneg(y)), skip_decrease_check=True, name="zsub-def"),
+            Rule(
+                znonneg(zint(zero, zero)),
                 true,
                 skip_decrease_check=True,
+                name="znonneg-zero",
             ),
             Rule(
-                znonneg(zint(zero_nat, succ(b))),
+                znonneg(zint(S(a), zero)),
+                true,
+                skip_decrease_check=True,
+                name="znonneg-pos",
+            ),
+            Rule(
+                znonneg(zint(zero, S(b))),
                 false,
                 skip_decrease_check=True,
+                name="znonneg-neg",
             ),
             Rule(
-                znonneg(zint(succ(a), succ(b))),
+                znonneg(zint(S(a), S(b))),
                 znonneg(zint(a, b)),
                 skip_decrease_check=True,
+                name="znonneg-cancel",
             ),
-            Rule(zleq(x, y), znonneg(zsub(y, x)), skip_decrease_check=True),
-            Rule(zlt(x, y), zleq(zsucc(x), y), skip_decrease_check=True),
+            Rule(
+                zleq(x, y),
+                znonneg(zsub(y, x)),
+                skip_decrease_check=True,
+                name="zleq-def",
+            ),
+            Rule(zlt(x, y), zleq(zsucc(x), y), skip_decrease_check=True, name="zlt-def"),
             Rule(
                 zadd(zsucc(x), y),
                 zsucc(zadd(x, y)),
                 skip_decrease_check=True,
+                name="zadd-zsucc-left",
             ),
             Rule(
                 zadd(y, zsucc(x)),
                 zsucc(zadd(y, x)),
                 skip_decrease_check=True,
+                name="zadd-zsucc-right",
             ),
             Rule(
                 zadd(zpred(x), y),
                 zpred(zadd(x, y)),
                 skip_decrease_check=True,
+                name="zadd-zpred-left",
             ),
             Rule(
                 zadd(y, zpred(x)),
                 zpred(zadd(y, x)),
                 skip_decrease_check=True,
+                name="zadd-zpred-right",
             ),
             Rule(
                 zmul(zsucc(x), y),
                 zadd(zmul(x, y), y),
                 skip_decrease_check=True,
+                name="zmul-zsucc-left",
             ),
             Rule(
                 zmul(y, zsucc(x)),
                 zadd(zmul(y, x), y),
                 skip_decrease_check=True,
+                name="zmul-zsucc-right",
             ),
             Rule(
                 zmul(zpred(x), y),
                 zadd(zmul(x, y), zneg(y)),
                 skip_decrease_check=True,
+                name="zmul-zpred-left",
             ),
             Rule(
                 zmul(y, zpred(x)),
                 zadd(zmul(y, x), zneg(y)),
                 skip_decrease_check=True,
+                name="zmul-zpred-right",
             ),
         ),
         schemes=(int_induction_scheme(z0),),
@@ -391,21 +425,6 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
     head = V("list_xh")
     tail = V("list_xt", "List")
     xs = V("list_xs", "List")
-    nil = Const("nil")
-
-    def cons(left: Term, right: Term) -> Term:
-        return App("cons", left, right)
-
-    def append(left: Term, right: Term) -> Term:
-        return App("append", left, right)
-
-    def length(term: Term) -> Term:
-        return App("length", term)
-
-    zero = Const("0")
-
-    def succ(term: Term) -> Term:
-        return App("S", term)
 
     return Theory(
         name=name,
@@ -423,10 +442,14 @@ def list_theory(name: str = "core.list", version: str = "1.0.0") -> Theory:
             "length": SortSignature((TypeConst("List", (a,)),), TypeConst("Nat")),
         },
         rules=(
-            Rule(append(nil, xs), xs),
-            Rule(append(cons(head, tail), xs), cons(head, append(tail, xs))),
-            Rule(length(nil), zero),
-            Rule(length(cons(head, tail)), succ(length(tail))),
+            Rule(append(nil, xs), xs, name="append-nil"),
+            Rule(
+                append(cons(head, tail), xs),
+                cons(head, append(tail, xs)),
+                name="append-cons",
+            ),
+            Rule(length(nil), zero, name="length-nil"),
+            Rule(length(cons(head, tail)), S(length(tail)), name="length-cons"),
         ),
         schemes=(list_induction_scheme(),),
         precedence={"append": 3, "length": 3, "cons": 2},
@@ -444,20 +467,10 @@ def map_theory(name: str = "core.map", version: str = "1.0.0") -> Theory:
     val = V("map_v")
 
     empty = Const("empty")
-
-    def put(map_term: Term, key_term: Term, val_term: Term) -> Term:
-        return App("put", map_term, key_term, val_term)
-
-    def get(map_term: Term, key_term: Term) -> Term:
-        return App("get", map_term, key_term)
-
     none = Const("none")
-
-    def some(val_term: Term) -> Term:
-        return App("some", val_term)
-
-    def eq(a: Term, b: Term) -> Term:
-        return App("eq", a, b)
+    put = fn("put")
+    get = fn("get")
+    some = fn("some")
 
     return Theory(
         name=name,
@@ -477,10 +490,12 @@ def map_theory(name: str = "core.map", version: str = "1.0.0") -> Theory:
             "some": SortSignature((v,), TypeConst("Option", (v,))),
         },
         rules=(
-            Rule(get(empty, key), none),
-            Rule(get(put(m, key, val), key), some(val)),
+            Rule(get(empty, key), none, name="get-empty"),
+            Rule(get(put(m, key, val), key), some(val), name="get-put-hit"),
             Rule(
-                get(put(m, j, val), key), App("if", eq(j, key), some(val), get(m, key))
+                get(put(m, j, val), key),
+                if_(eq(j, key), some(val), get(m, key)),
+                name="get-put-miss",
             ),
         ),
         precedence={"put": 2, "get": 2},
@@ -744,7 +759,7 @@ def _install_theory_impl(
         )
 
     for index, rule in enumerate(theory.rules):
-        rule_name = f"theory.{theory.name}.{index}"
+        rule_name = f"theory.{theory.name}.{rule.name or index}"
         env.register_rule(rule, scope=install_scope, label=rule_name, name=rule_name)
 
     for lemma in sorted(theory.lemmas, key=lambda item: item.name):
@@ -1172,15 +1187,8 @@ def register_int_lemmas(
     x = V("il_x", "Int")
     y = V("il_y", "Int")
     z = V("il_z", "Int")
-
-    def eq(left: Term, right: Term) -> Term:
-        return App("eq", left, right)
-
-    def zadd(left: Term, right: Term) -> Term:
-        return App("zadd", left, right)
-
-    def zneg(term: Term) -> Term:
-        return App("zneg", term)
+    zadd = fn("zadd")
+    zneg = fn("zneg")
 
     int_scheme = get_induction_scheme(engine, "int")
     if int_scheme is None:

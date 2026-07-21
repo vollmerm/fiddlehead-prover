@@ -20,14 +20,22 @@ Boyer–Moore style rewriting core with:
 - strict inference-first term typing
 - modular theory packages
 
-Public API (small, stable surface):
+Public API (small, stable surface — see ``__all__``):
 - term constructors: V, Const, App
+- term builders: fn, plus ready-made builders for the builtin and core-theory
+  symbols (eq, neq, if_, not_, and_, or_, S, zero, add, mul, nil, cons,
+  append, length)
 - proving entry points: normalize, prove (returns ProofResult)
 - checked proving entry points: prove_checked, check_certificate
 - typing APIs: SortSignature, register_sort_signature, infer_type, infer_sort
 - induction registration: register_induction_scheme, get_induction_scheme, get_induction_scheme_for_sort
 - theory + theorem environment/session: Theory, nat_theory, list_theory, load_theory_module,
   install_theory, get_theorem_environment, TheoremEnvironment, ProofSession
+
+Advanced names (TypeVar, Fun, EngineConfig, rule classes, trace internals, ...)
+are not star-exported; import them explicitly from this module or from the
+submodule that defines them (fiddlehead.syntax, .kernel, .proof, .trace,
+.rule_classes, .generalize, .theory).
 """
 
 from .kernel import (
@@ -83,7 +91,31 @@ from .rule_classes import (
     rewrite_rule_class,
 )
 from .session import ProofSession
-from .syntax import App, Const, V, apply_subst, false, match, reset_var_interner, true
+from .syntax import (
+    App,
+    Const,
+    S,
+    V,
+    add,
+    and_,
+    append,
+    apply_subst,
+    cons,
+    eq,
+    false,
+    fn,
+    if_,
+    length,
+    match,
+    mul,
+    neq,
+    nil,
+    not_,
+    or_,
+    reset_var_interner,
+    true,
+    zero,
+)
 from .trace import (
     ProofNode,
     ProofTrace,
@@ -111,78 +143,76 @@ from .theory import (
 )
 
 __all__ = [
+    # terms
     "Term",
-    "TypeTerm",
-    "TypeVar",
-    "TypeConst",
     "Var",
-    "Fun",
     "V",
-    "reset_var_interner",
     "Const",
     "App",
     "true",
     "false",
+    "reset_var_interner",
+    # term builders
+    "fn",
+    "eq",
+    "neq",
+    "if_",
+    "not_",
+    "and_",
+    "or_",
+    "S",
+    "zero",
+    "add",
+    "mul",
+    "nil",
+    "cons",
+    "append",
+    "length",
+    # rules and clauses
     "Rule",
     "Clause",
-    "Context",
-    "InductionConstructor",
+    # engine
+    "Engine",
+    "make_engine",
+    "builtin_rules",
+    # proving
+    "normalize",
+    "prove",
+    "prove_checked",
+    "check_certificate",
+    "ProofResult",
+    "ProofCertificate",
+    "simplify_clause",
+    "induction_branches",
+    # traces
+    "ProofTrace",
+    "render_proof_trace",
+    # sorts and typing
+    "SortSignature",
+    "TypeConst",
+    "register_sort_signature",
+    "infer_sort",
+    "infer_type",
+    # induction schemes
     "InductionScheme",
-    "nat_induction_scheme",
-    "int_induction_scheme",
-    "list_induction_scheme",
-    "map_induction_scheme",
-    "tree_induction_scheme",
+    "InductionConstructor",
+    "register_induction_scheme",
+    "get_induction_scheme",
+    "get_induction_scheme_for_sort",
+    # theories
+    "Theory",
+    "Lemma",
     "nat_theory",
     "int_theory",
     "list_theory",
     "map_theory",
     "tree_theory",
-    "register_induction_scheme",
-    "get_induction_scheme",
-    "get_induction_scheme_for_sort",
-    "make_engine",
-    "Engine",
-    "EngineConfig",
-    "SortSignature",
-    "default_engine_config",
-    "default_sort_signatures",
-    "builtin_rules",
-    "register_sort_signature",
-    "get_sort_signature",
-    "infer_type",
-    "infer_sort",
-    "match",
-    "apply_subst",
-    "normalize",
-    "prove",
-    "simplify_clause",
-    "clause_solved",
-    "induction_branches",
-    "ProofTrace",
-    "ProofNode",
-    "render_proof_trace",
-    "render_waterfall_trace",
-    "ProofResult",
-    "ProofCertificate",
-    "certificate_to_proof_trace",
-    "prove_checked",
-    "check_certificate",
-    "Lemma",
-    "NamedRuleInfo",
-    "RuleClass",
-    "RuleClassSpec",
-    "rewrite_rule_class",
-    "forward_chaining_rule_class",
-    "RuleSource",
-    "Theory",
-    "theory_from_module",
-    "load_theory_module",
     "install_theory",
+    "load_theory_module",
     "TheoremEnvironment",
     "get_theorem_environment",
-    "register_int_lemmas",
     "register_recursive_definition",
+    "register_int_lemmas",
+    # interactive sessions
     "ProofSession",
-    "Trace",
 ]

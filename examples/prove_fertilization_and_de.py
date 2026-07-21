@@ -7,6 +7,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from fiddlehead import *
+from fiddlehead.prover import TypeVar, clause_solved
 from fiddlehead.proof import (
     Clause,
     clause_solved,
@@ -29,12 +30,8 @@ def demo_destructor_elimination(engine) -> None:
     h = V("hd")
     t = V("tl", "List")
     nil = Const("nil")
-    cons = lambda a, b: App("cons", a, b)
     head = lambda x: App("head", x)
     tail = lambda x: App("tail", x)
-    length = lambda x: App("length", x)
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
 
     # Register head and tail as selector rules
     theory = get_theorem_environment(engine)
@@ -115,9 +112,6 @@ def demo_fertilization(engine) -> None:
     ys = V("ys_fert", "List")
     zs = V("zs_fert", "List")
     h_var = V("h_fert")
-    append = lambda a, b: App("append", a, b)
-    cons = lambda a, b: App("cons", a, b)
-    eq = lambda a, b: App("eq", a, b)
 
     # Mimic the step clause from the append-assoc induction proof.
     # IH: append(append(xs_ih, ys), zs) = append(xs_ih, append(ys, zs))
@@ -168,10 +162,6 @@ def demo_standard_proofs_unaffected(engine) -> None:
     n = V("n", "Nat")
     m = V("m", "Nat")
     nil = Const("nil")
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
-    append = lambda a, b: App("append", a, b)
-    length = lambda x: App("length", x)
 
     list_scheme = get_induction_scheme(engine, "list")
     nat_scheme = get_induction_scheme(engine, "nat")

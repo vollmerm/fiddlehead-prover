@@ -15,8 +15,6 @@ def main() -> None:
     engine = make_engine(rules=builtin_rules())
     install_theory(engine, nat_theory(), activate_scopes=True)
 
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
 
     x_nat = V("x", "Nat")
     y_nat = V("y", "Nat")

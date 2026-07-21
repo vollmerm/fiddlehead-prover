@@ -16,10 +16,6 @@ def main() -> None:
     install_theory(engine, nat_theory(), activate_scopes=True)
     install_theory(engine, list_theory(), activate_scopes=True)
 
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
-    append = lambda a, b: App("append", a, b)
-    length = lambda t: App("length", t)
 
     xs = V("xs", "List")
     ys = V("ys", "List")

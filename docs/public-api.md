@@ -57,14 +57,26 @@ nil = Const("nil")
 Creates a function application term.
 
 ```python
-S = lambda t: App("S", t)
-add = lambda a, b: App("add", a, b)
-eq = lambda a, b: App("eq", a, b)
-append = lambda a, b: App("append", a, b)
+App("add", x, zero)
 ```
 
-In practice, most scripts define a few small helpers like `eq`, `add`, or
-`append` so the goals are easier to read.
+### Term builders
+
+Fiddlehead exports ready-made builders for the builtin logic symbols
+(`eq`, `neq`, `if_`, `not_`, `and_`, `or_`) and the core-theory symbols
+(`S`, `zero`, `add`, `mul`, `nil`, `cons`, `append`, `length`), so goals
+read naturally without any per-script helper definitions:
+
+```python
+goal = Clause((), eq(add(x, zero), x))
+```
+
+For your own symbols, `fn(symbol)` returns a builder:
+
+```python
+rev = fn("rev")
+rev(cons(x, nil))  # same as App("rev", App("cons", x, Const("nil")))
+```
 
 ## Creating an engine
 
@@ -279,9 +291,6 @@ reset_var_interner()
 
 x = V("x", "Nat")
 zero = Const("0")
-S = lambda t: App("S", t)
-add = lambda a, b: App("add", a, b)
-eq = lambda a, b: App("eq", a, b)
 
 engine = make_engine(rules=builtin_rules())
 install_theory(engine, nat_theory(), activate_scopes=True)
@@ -304,8 +313,6 @@ from fiddlehead import *
 
 reset_var_interner()
 
-eq = lambda a, b: App("eq", a, b)
-append = lambda a, b: App("append", a, b)
 
 xs = V("xs", "List")
 ys = V("ys", "List")
@@ -340,6 +347,10 @@ this repository.
 
 Use `register_recursive_definition(...)` when you want to add recursive function
 equations through the public API instead of manually mutating engine rule lists.
+
+`TypeVar` (a sort variable, used in generic signatures) is not star-exported
+because it would shadow `typing.TypeVar`; import it explicitly with
+`from fiddlehead.prover import TypeVar`.
 
 ```python
 register_recursive_definition(

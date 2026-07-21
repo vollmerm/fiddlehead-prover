@@ -33,13 +33,8 @@ def main() -> None:
     xs = V("xs", "List")
     ys = V("ys", "List")
     nil = Const("nil")
-    cons = lambda a, b: App("cons", a, b)
-    append = lambda a, b: App("append", a, b)
-    length = lambda a: App("length", a)
     zero = Const("0")
     succ = lambda t: App("S", t)
-    add = lambda a, b: App("add", a, b)
-    eq = lambda a, b: App("eq", a, b)
 
     print("=" * 70)
     print("ProofSession Tactics Demo")

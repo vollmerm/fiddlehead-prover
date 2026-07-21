@@ -64,25 +64,25 @@ This gives:
 The script builds IMP syntax constructors as helper lambdas:
 
 ```python
-aconst = lambda t: App("aconst", t)
-avar = lambda t: App("avar", t)
-aadd = lambda a, b: App("aadd", a, b)
+aconst = fn("aconst")
+avar = fn("avar")
+aadd = fn("aadd")
 
-bconst = lambda b: App("bconst", b)
-blt = lambda a, b: App("blt", a, b)
+bconst = fn("bconst")
+blt = fn("blt")
 
-assign = lambda x, e: App("assign", x, e)
-seq = lambda c1, c2: App("seq", c1, c2)
-if_cmd = lambda b, c1, c2: App("if_cmd", b, c1, c2)
-while_cmd = lambda b, c: App("while_cmd", b, c)
+assign = fn("assign")
+seq = fn("seq")
+if_cmd = fn("if_cmd")
+while_cmd = fn("while_cmd")
 ```
 
 Interpreter functions:
 
 ```python
-eval_a = lambda e, s: App("eval_a", e, s)
-eval_b = lambda b, s: App("eval_b", b, s)
-exec_cmd = lambda c, s: App("exec", c, s)
+eval_a = fn("eval_a")
+eval_b = fn("eval_b")
+exec_cmd = fn("exec")
 ```
 
 ---
@@ -130,17 +130,17 @@ Rule(
 ### 6.1 Assertion terms
 
 ```python
-bassn = lambda b: App("bassn", b)          # Bool expression lifted to assertion
-and_a = lambda p, q: App("and_a", p, q)    # conjunction
-not_a = lambda p: App("not_a", p)          # negation
-aeq = lambda x, n: App("aeq", x, n)        # x = n
-holds = lambda p, s: App("holds", p, s)    # assertion satisfaction
+bassn = fn("bassn")  # Bool expression lifted to assertion
+and_a = fn("and_a")  # conjunction
+not_a = fn("not_a")  # negation
+aeq = fn("aeq")  # x = n
+holds = fn("holds")  # assertion satisfaction
 ```
 
 ### 6.2 Hoare judgment term
 
 ```python
-hoare = lambda p, c, q, s: App("hoare", p, c, q, s)
+hoare = fn("hoare")
 ```
 
 ### 6.3 Hoare/Assertion semantics rules

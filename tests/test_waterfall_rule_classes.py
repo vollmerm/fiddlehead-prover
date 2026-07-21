@@ -10,12 +10,14 @@ from fiddlehead.prover import (
     SortSignature,
     TypeConst,
     V,
+    append,
     builtin_rules,
     certificate_to_proof_trace,
     check_certificate,
+    eq,
     forward_chaining_rule_class,
-    get_theorem_environment,
     get_induction_scheme,
+    get_theorem_environment,
     install_theory,
     list_theory,
     make_engine,
@@ -23,8 +25,8 @@ from fiddlehead.prover import (
     normalize,
     prove,
     prove_checked,
-    render_proof_trace,
     register_sort_signature,
+    render_proof_trace,
     render_waterfall_trace,
     reset_var_interner,
 )
@@ -67,7 +69,6 @@ def test_waterfall_uses_forward_chaining_rules() -> None:
 
     x = V("x", "Nat")
     zero = Const("0")
-    eq = lambda a, b: App("eq", a, b)
     register_sort_signature(engine, "id_nat", SortSignature((TypeConst("Nat"),), TypeConst("Nat")))
 
     theory.register_rule(
@@ -98,7 +99,6 @@ def test_prove_checked_uses_waterfall_by_default() -> None:
 
     x = V("x", "Nat")
     zero = Const("0")
-    eq = lambda a, b: App("eq", a, b)
     register_sort_signature(
         engine, "id_nat", SortSignature((TypeConst("Nat"),), TypeConst("Nat"))
     )
@@ -130,8 +130,6 @@ def test_prove_checked_preserves_induction_support() -> None:
 
     xs = V("xs", "List")
     nil = Const("nil")
-    eq = lambda a, b: App("eq", a, b)
-    append = lambda a, b: App("append", a, b)
 
     list_scheme = get_induction_scheme(engine, "list")
     assert list_scheme is not None

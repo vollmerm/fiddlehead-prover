@@ -23,16 +23,22 @@ from fiddlehead.proof import (
 from fiddlehead.prover import (
     App,
     Const,
-    InductionScheme,
     InductionConstructor,
+    InductionScheme,
+    S,
     SortSignature,
     TypeConst,
     TypeVar,
     V,
+    add,
+    append,
     builtin_rules,
+    cons,
     default_engine_config,
+    eq,
     get_induction_scheme,
     install_theory,
+    length,
     list_theory,
     make_engine,
     nat_theory,
@@ -58,12 +64,6 @@ def fert_env() -> dict:
     install_theory(engine, list_theory(), activate_scopes=True)
 
     nil = Const("nil")
-    cons = lambda h, t: App("cons", h, t)
-    append = lambda a, b: App("append", a, b)
-    length = lambda x: App("length", x)
-    eq = lambda a, b: App("eq", a, b)
-    add = lambda a, b: App("add", a, b)
-    S = lambda n: App("S", n)
     zero = Const("0")
 
     xs = V("xs", "List")
@@ -104,14 +104,8 @@ def de_env() -> dict:
     install_theory(engine, list_theory(), activate_scopes=True)
 
     nil = Const("nil")
-    cons = lambda h, t: App("cons", h, t)
-    eq = lambda a, b: App("eq", a, b)
-    length = lambda x: App("length", x)
-    append = lambda a, b: App("append", a, b)
-    add = lambda a, b: App("add", a, b)
     head = lambda x: App("head", x)
     tail = lambda x: App("tail", x)
-    S = lambda n: App("S", n)
     zero = Const("0")
 
     xs = V("xs", "List")

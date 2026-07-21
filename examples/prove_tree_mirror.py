@@ -7,6 +7,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from fiddlehead import *
+from fiddlehead.prover import TypeVar, tree_induction_scheme
 
 
 def main() -> None:
@@ -30,11 +31,9 @@ def main() -> None:
 
     leaf = Const("leaf")
     node = lambda l, v, r: App("node", l, v, r)
-    eq = lambda a, b: App("eq", a, b)
 
     mirror = lambda t: App("mirror", t)
     size = lambda t: App("size", t)
-    add = lambda a, b: App("add", a, b)
 
     register_sort_signature(
         engine,

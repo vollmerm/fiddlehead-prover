@@ -51,12 +51,16 @@ class Rule:
         skip_decrease_check: If True, skip the termination (decrease) check.
             Use this for induction hypothesis rules, lemmas, and other context rules
             where the decrease heuristic may incorrectly reject valid rewrites.
+        name: Optional human-readable name. Theory installation registers the
+            rule as ``theory.<theory-name>.<name>`` instead of a bare index.
+            Ignored by rule equality and hashing.
     """
 
     lhs: Term
     rhs: Term
     conditions: Tuple[Tuple[Term, Term], ...] = ()
     skip_decrease_check: bool = False
+    name: Optional[str] = field(default=None, compare=False)
 
 
 class RuleIndex:
